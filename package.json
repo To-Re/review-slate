@@ -2,7 +2,7 @@
   "name": "code-review",
   "displayName": "ReviewSlate",
   "description": "在编辑器里审阅文件变更、留下批注并交给 Agent 处理。固定基点，保存进度，无需服务器。",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "publisher": "to-re",
   "license": "MIT",
   "engines": {
@@ -16,6 +16,7 @@
   ],
   "main": "./dist/extension.js",
   "activationEvents": [
+    "onView:codeReview.settings",
     "onView:codeReview.files",
     "onView:codeReview.comments",
     "onView:codeReview.reviews"
@@ -36,25 +37,44 @@
     "views": {
       "codeReview": [
         {
+          "id": "codeReview.settings",
+          "name": "审阅设置",
+          "when": "isWorkspaceTrusted",
+          "initialSize": 2
+        },
+        {
           "id": "codeReview.reviews",
           "name": "审阅记录",
-          "when": "isWorkspaceTrusted"
+          "when": "isWorkspaceTrusted",
+          "initialSize": 3
         },
         {
           "id": "codeReview.files",
           "name": "变更文件",
           "icon": "$(checklist)",
-          "when": "isWorkspaceTrusted"
+          "when": "isWorkspaceTrusted",
+          "initialSize": 12
         },
         {
           "id": "codeReview.comments",
           "name": "审阅评论",
           "type": "webview",
-          "when": "isWorkspaceTrusted"
+          "when": "isWorkspaceTrusted",
+          "initialSize": 5
         }
       ]
     },
     "commands": [
+      {
+        "command": "codeReview.newReview",
+        "title": "ReviewSlate：新建审阅…",
+        "icon": "$(add)"
+      },
+      {
+        "command": "codeReview.newFromCommit",
+        "title": "ReviewSlate：从提交 SHA 新建审阅…",
+        "icon": "$(git-commit)"
+      },
       {
         "command": "codeReview.configure",
         "title": "ReviewSlate：选择基点",
@@ -157,21 +177,16 @@
       },
       {
         "command": "codeReview.fromCommit",
-        "title": "以此提交为基点创建 CR",
+        "title": "ReviewSlate：以此提交为基点新建审阅",
         "icon": "$(git-commit)"
       }
     ],
     "menus": {
       "view/title": [
         {
-          "command": "codeReview.configure",
-          "when": "view == codeReview.files",
+          "command": "codeReview.newReview",
+          "when": "view == codeReview.reviews",
           "group": "navigation@1"
-        },
-        {
-          "command": "codeReview.repository",
-          "when": "view == codeReview.files",
-          "group": "settings@2"
         },
         {
           "command": "codeReview.refresh",
@@ -189,11 +204,6 @@
           "group": "navigation@2"
         },
         {
-          "command": "codeReview.defaultBase",
-          "when": "view == codeReview.files",
-          "group": "settings@1"
-        },
-        {
           "command": "codeReview.expandAll",
           "when": "view == codeReview.files",
           "group": "navigation@2"
@@ -202,6 +212,11 @@
           "command": "codeReview.collapseAll",
           "when": "view == codeReview.files",
           "group": "navigation@3"
+        },
+        {
+          "command": "codeReview.newFromCommit",
+          "when": "view == codeReview.reviews",
+          "group": "review@1"
         }
       ],
       "view/item/context": [
@@ -286,7 +301,7 @@
       "scm/historyItem/context": [
         {
           "command": "codeReview.fromCommit",
-          "when": "scmProvider == git && !listMultiSelection && isWorkspaceTrusted",
+          "when": "scmProvider == git && !listMultiSelection",
           "group": "5_compare@4"
         }
       ],
@@ -300,11 +315,7 @@
     "viewsWelcome": [
       {
         "view": "codeReview.files",
-        "contents": "选一个固定基点，持续审阅当前分支和工作区。\n[选择基点](command:codeReview.configure)"
-      },
-      {
-        "view": "codeReview.reviews",
-        "contents": "每个分支、每个固定基点分别保存进度与评论。\n[选择基点，开始审阅](command:codeReview.configure)"
+        "contents": "新建审阅并选择固定基点，持续查看当前分支和工作区的变化。\n[新建审阅](command:codeReview.newReview)"
       }
     ],
     "viewsContainers": {

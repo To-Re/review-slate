@@ -12,7 +12,7 @@ npm test
 npm run package
 ```
 
-`npm test` 先编译 TypeScript，再运行 Node.js 测试；`npm run package` 输出 `artifacts/review-slate-1.0.0.vsix`。安装生成的 VSIX 后，使用独立的合成项目进行界面验证。构建和测试命令不会自动启动编辑器或安装扩展。
+`npm test` 先编译 TypeScript，再运行 Node.js 测试；`npm run package` 输出 `artifacts/review-slate-1.0.1.vsix`。安装生成的 VSIX 后，使用独立的合成项目进行界面验证。构建和测试命令不会自动启动编辑器或安装扩展。
 
 源码入口和存储约定见[数据与架构](docs/data.md)。运行时仅依赖编辑器 API 与 Node.js 内置模块；开发依赖通过锁文件固定，`overrides` 保留已核查的构建依赖版本；更新依赖时应在空目录执行 `npm ci --ignore-scripts`、`npm audit` 和打包，确认安装与安全补丁均生效。包内容由 `package.json` 的 `files` 白名单限定；打包入口为 `scripts/package.cjs`。
 

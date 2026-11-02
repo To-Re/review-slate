@@ -2,13 +2,15 @@ import * as vscode from 'vscode';
 import * as path from 'node:path';
 import { Anchor, anchorFor, locate } from './anchors';
 import { baselineOptions } from './baselines';
+import { pickCommit } from './commit-picker';
 import { noteStatus, replyMatches, sameTarget } from './comments';
 import { GitRepository } from './git';
 import { handoffText } from './handoff';
 import { HistoryNode, ReviewHistory } from './history';
-import { decode, DefaultBase, hash, isCommit, isNotes, LegacyComparison, messageOf, Pair, snapshotId, snapshotText } from './model';
+import { decode, hash, isCommit, isNotes, LegacyComparison, messageOf, Pair, snapshotId, snapshotText } from './model';
 import { CommentPanel, PanelMessage } from './panel';
 import { ReviewService, Selection } from './review';
+import { ReviewSettings, SettingNode } from './settings';
 import { filesIn, markRequest, ReviewTree, TreeNode } from './tree';
 
 interface DocumentData { selection: Selection; side: 'left' | 'right'; text: string; full: boolean; root: string; live?: boolean }
@@ -17,6 +19,8 @@ export class ReviewExtension implements vscode.Disposable {
   service?: ReviewService;
   readonly tree = new ReviewTree();
   readonly history = new ReviewHistory();
+  readonly settings = new ReviewSettings();
+  readonly settingsView: vscode.TreeView<SettingNode>;
   readonly historyView: vscode.TreeView<HistoryNode>;
   readonly panel: CommentPanel;
   readonly view: vscode.TreeView<TreeNode>;
@@ -44,7 +48,8 @@ export class ReviewExtension implements vscode.Disposable {
     });
     this.view = vscode.window.createTreeView('codeReview.files', { treeDataProvider: this.tree, manageCheckboxStateManually: true, showCollapseAll: false });
     this.historyView = vscode.window.createTreeView('codeReview.reviews', { treeDataProvider: this.history });
-    this.listeners.push(this.view, this.tree, this.panel, this.historyView, this.history, this.documentChanged,
+    this.settingsView = vscode.window.createTreeView('codeReview.settings', { treeDataProvider: this.settings });
+    this.listeners.push(this.view, this.tree, this.panel, this.historyView, this.history, this.settingsView, this.settings, this.documentChanged,
       vscode.window.registerFileDecorationProvider(this.tree),
       vscode.window.registerWebviewViewProvider('codeReview.comments', this.panel),
       vscode.workspace.registerTextDocumentContentProvider('code-review', {
@@ -57,6 +62,8 @@ export class ReviewExtension implements vscode.Disposable {
       }));
     const commands: Record<string, (node?: TreeNode) => Promise<void>> = {
       configure: () => this.configure(), defaultBase: () => this.configure(true), repository: () => this.selectRepository(true),
+      newReview: () => this.configure(false, true),
+      newFromCommit: () => this.newFromCommit(),
       copyBase: node => this.copyBase(node),
       expandAll: () => this.tree.expandAll(this.view),
       collapseAll: async () => { await vscode.commands.executeCommand('workbench.actions.treeView.codeReview.files.collapseAll'); },
@@ -148,17 +155,21 @@ export class ReviewExtension implements vscode.Disposable {
       { repo: repositories.find(repo => repo.root === last) || repositories[0] };
     if (!selected) return;
     this.service = new ReviewService(selected.repo, this.context.globalStorageUri.fsPath);
+    this.settings.render(selected.repo.root, '读取中…');
     this.selected = undefined; this.anchor = undefined;
     await this.context.workspaceState.update('selectedRepository', selected.repo.root);
     try {
       await this.service.start(this.context.globalState.get<LegacyComparison>('comparison:' + hash(selected.repo.root)));
+      await this.refreshSettings();
     } catch (error) {
+      this.settings.render(selected.repo.root, '读取失败');
       this.service.view.error = messageOf(error); throw error;
     }
   }
   private async refresh(): Promise<void> {
     if (!this.service) { await this.selectRepository(false); return; }
     await this.service.refresh();
+    await this.refreshSettings();
     if (this.selected?.session.id !== this.service.view.session?.id) { this.selected = undefined; this.anchor = undefined; }
     if (this.selected && !this.anchor && this.selected.target !== 'directory') {
       const row = this.service.view.files.find(file => file.path === this.selected!.file);
@@ -215,48 +226,52 @@ export class ReviewExtension implements vscode.Disposable {
     }
     return result;
   }
-  private async pickCommit(service: ReviewService): Promise<DefaultBase | undefined> {
-    const items: (vscode.QuickPickItem & { oid?: string })[] = (await service.repo.commits()).map(commit => ({
-      label: commit.oid.slice(0, 8) + '  ' + commit.subject, description: commit.date, oid: commit.oid
-    }));
-    items.push({ label: '输入其他提交 SHA…', alwaysShow: true });
-    const commit = await vscode.window.showQuickPick(items, { title: '选择基点提交', placeHolder: '搜索提交说明或 SHA', matchOnDescription: true });
-    if (!commit) return;
-    const typed = commit.oid || await vscode.window.showInputBox({ title: '输入基点提交 SHA', prompt: '输入完整或简短的 commit SHA' });
-    if (!typed) return;
-    if (!/^[a-fA-F0-9]{7,64}$/.test(typed.trim())) throw new Error('请输入有效的提交 SHA');
-    const ref = await service.repo.resolve(typed.trim());
-    return { kind: 'commit', ref, label: ref.slice(0, 10) };
+  private async refreshSettings(): Promise<void> {
+    const service = this.service;
+    if (!service) { this.settings.render(); return; }
+    try {
+      const saved = await service.state.defaultBase(), references = await service.repo.mainReferences();
+      const preferred = baselineOptions(references, saved).find(item => item.source);
+      this.settings.render(service.repo.root, preferred ? (saved ? '' : '自动 · ') + preferred.label : '选择提交…');
+    } catch (error) {
+      this.settings.render(service.repo.root, '读取失败');
+      throw error;
+    }
   }
-  private async configure(setDefault = false): Promise<void> {
+  private async configure(setDefault = false, newReview = false): Promise<void> {
     if (!this.service) await this.selectRepository(false);
     const service = this.service;
     if (!service) return;
     const references = await service.repo.mainReferences(), saved = await service.state.defaultBase();
     const choice = await vscode.window.showQuickPick(baselineOptions(references, saved, setDefault), {
-      title: setDefault ? '设置本仓库默认基点' : '选择基点',
+      title: setDefault ? '设置本仓库默认基点' : newReview ? '新建审阅 · 选择基点' : '选择基点',
       placeHolder: setDefault ? '只设置此仓库的默认来源，当前审阅继续使用已固定的 commit' : '选好后固定不变，右侧始终为当前分支＋工作区'
     });
     if (!choice) return;
-    const source = choice.chooseCommit ? await this.pickCommit(service) : choice.source;
+    const source = choice.chooseCommit ? await pickCommit(service.repo) : choice.source;
     if (!source) return;
     if (setDefault) {
       await service.repo.resolve(source.ref);
       await service.state.setDefaultBase(source);
+      await this.refreshSettings();
       void vscode.window.showInformationMessage('已将 ' + source.label + ' 设为本仓库默认基点。当前审阅的 commit 保持固定。');
       return;
     }
     const base = source.kind === 'branch' ? await service.repo.forkPoint(source.ref) : await service.repo.resolve(source.ref);
+    const previous = new Set(service.view.sessions?.map(session => session.id));
     await service.choose(base, source.kind === 'branch' ? source.label + ' 的分叉基点' : '指定提交');
     this.selected = undefined; this.anchor = undefined;
+    if (newReview && service.view.session) void vscode.window.showInformationMessage(previous.has(service.view.session.id) ?
+      '已打开此分支与基点的已有审阅，进度和评论已保留。' : '已新建审阅，原审阅记录仍保留。');
   }
   private async fromCommit(sourceControl: unknown, historyItem: unknown): Promise<void> {
+    if (!vscode.workspace.isTrusted) throw new Error('请先信任此工作区，再创建审阅');
     const source = sourceControl as { id?: string; rootUri?: { scheme?: string; fsPath?: string } } | undefined;
     const item = historyItem as { id?: string } | undefined;
     const root = source?.rootUri?.fsPath, commit = item?.id;
     if (source?.id !== 'git' || !root || !path.isAbsolute(root) ||
         !['file', 'vscode-remote'].includes(source.rootUri?.scheme || '') || typeof commit !== 'string' || !isCommit(commit)) {
-      throw new Error('请在 Git 图形中右键一个真实提交，再选择“以此提交为基点创建 CR”');
+      throw new Error('请在 Git 图形中右键一个真实提交，再选择“ReviewSlate：以此提交为基点新建审阅”');
     }
     const selected = await GitRepository.open(root);
     if (!(await this.repositories()).some(repo => repo.root === selected.root)) throw new Error('该提交所属仓库不在当前工作区，请先打开它');
@@ -265,7 +280,22 @@ export class ReviewExtension implements vscode.Disposable {
     if (service !== this.service) await service.start(this.context.globalState.get<LegacyComparison>('comparison:' + hash(selected.root)));
     await service.choose(base, 'Git 图形选中的提交');
     this.service = service; this.selected = undefined; this.anchor = undefined;
+    await this.refreshSettings();
     await this.context.workspaceState.update('selectedRepository', selected.root);
+    await vscode.commands.executeCommand('codeReview.files.focus');
+  }
+  private async newFromCommit(): Promise<void> {
+    if (!vscode.workspace.isTrusted) throw new Error('请先信任此工作区，再创建审阅');
+    if (!this.service) await this.selectRepository(false);
+    const service = this.service;
+    if (!service) return;
+    const source = await pickCommit(service.repo);
+    if (!source) return;
+    const previous = new Set(service.view.sessions?.map(session => session.id));
+    await service.choose(source.ref, '指定提交');
+    this.selected = undefined; this.anchor = undefined;
+    if (service.view.session) void vscode.window.showInformationMessage(previous.has(service.view.session.id) ?
+      '已打开此分支与基点的已有审阅，进度和评论已保留。' : '已新建审阅，原审阅记录仍保留。');
     await vscode.commands.executeCommand('codeReview.files.focus');
   }
   private async purgeReview(node: HistoryNode): Promise<void> {
@@ -305,6 +335,7 @@ export class ReviewExtension implements vscode.Disposable {
     const dirty = this.dirtyFiles();
     this.renderedDirty = JSON.stringify([...dirty].sort());
     if (!service) {
+      this.settings.render();
       this.tree.render({ files: [], notes: { comments: [], replies: new Map() } });
       this.history.render({ files: [], notes: { comments: [], replies: new Map() } });
       this.historyView.description = undefined;

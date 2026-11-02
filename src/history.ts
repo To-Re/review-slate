@@ -21,8 +21,15 @@ export class ReviewHistory implements vscode.TreeDataProvider<HistoryNode>, vsco
     if (incomplete.length) this.nodes.push({ id: 'purge-pending', children: incomplete });
     this.changed.fire();
   }
-  getChildren(node?: HistoryNode): HistoryNode[] { return node?.children || (node ? [] : this.nodes); }
+  getChildren(node?: HistoryNode): HistoryNode[] { return node?.children || (node ? [] : [{ id: 'new-review' }, ...this.nodes]); }
   getTreeItem(node: HistoryNode): vscode.TreeItem {
+    if (node.id === 'new-review') {
+      const item = new vscode.TreeItem('新建审阅…', vscode.TreeItemCollapsibleState.None);
+      item.id = node.id; item.iconPath = new vscode.ThemeIcon('add', new vscode.ThemeColor('codeReview.commentForeground'));
+      item.tooltip = '选择一个基点；不同基点的进度和评论分别保存。';
+      item.command = { command: 'codeReview.newReview', title: '新建审阅' };
+      return item;
+    }
     const review = node.review;
     if (!review) {
       const item = new vscode.TreeItem(node.id === 'purge-pending' ? '删除未完成 · 可重试' : '已归档 · 可恢复', vscode.TreeItemCollapsibleState.Collapsed);

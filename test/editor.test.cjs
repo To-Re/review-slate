@@ -23,6 +23,14 @@ test('编辑器适配：入口、两种基点、通知不阻塞、原生 Diff、
       createTreeView: (id, options) => { const result = { ...disposable(), options, visible: false, selection: [], reveal: async (...args) => calls.push(['reveal', ...args]), onDidChangeCheckboxState: fn => { checkbox = fn; return disposable(); }, onDidChangeVisibility: disposable }; if (id === 'codeReview.files') view = result; return result; },
       registerWebviewViewProvider: (_id, p) => { panel = p; return disposable(); },
       showQuickPick: async (items, options) => pick ? pick(items, options) : undefined,
+      createQuickPick: () => {
+        let accept, hide;
+        return { items: [], selectedItems: [], value: '',
+          onDidAccept: fn => { accept = fn; return disposable(); }, onDidHide: fn => { hide = fn; return disposable(); }, onDidChangeValue: disposable,
+          show() { const selected = pick?.(this.items, { title: this.title }); if (selected) { this.selectedItems = [selected]; accept(); } else hide(); },
+          dispose() {}
+        };
+      },
       showInputBox: async () => undefined,
       showInformationMessage: () => suppress ? new Promise(() => {}) : Promise.resolve(),
       showErrorMessage: text => { errors.push(text); return suppress ? new Promise(() => {}) : Promise.resolve(); },
@@ -37,7 +45,9 @@ test('编辑器适配：入口、两种基点、通知不阻塞、原生 Diff、
   let activate; try { ({ activate } = require('../dist/extension')); } finally { Module._load = previous; }
   const context = { extensionPath: path.resolve(__dirname, '..'), extensionMode: 3, subscriptions: [], globalStorageUri: { fsPath: f.storage }, globalState: memory(), workspaceState: memory() };
   let app = activate(context); t.after(() => app.dispose()); await app.ready;
-  assert.equal(app.tree.nodes.length, 0); assert.equal(view.message, undefined); assert.equal(commands.size, 21);
+  assert.equal(app.tree.nodes.length, 0); assert.equal(view.message, undefined); assert.equal(commands.size, 23);
+  assert.equal(app.history.getTreeItem(app.history.getChildren()[0]).command.command, 'codeReview.newReview');
+  assert.equal(app.settings.nodes[0].description, path.basename(f.root));
   let menus = 0;
   pick = items => { menus++; assert.equal(items.length, 2); assert.deepEqual(items.map(i => i.label), ['本地主分支 · main', '选择一个提交…']); return items[0]; };
   suppress = true;
@@ -53,10 +63,15 @@ test('编辑器适配：入口、两种基点、通知不阻塞、原生 Diff、
   pick = items => items.find(item => item.source?.ref === 'refs/heads/feature');
   await commands.get('codeReview.defaultBase')();
   assert.equal((await app.service.state.defaultBase()).ref, 'refs/heads/feature');
+  assert.match(app.settings.nodes[1].description, /feature/);
   assert.deepEqual(app.service.view.session, saved);
   pick = () => undefined; await commands.get('codeReview.configure')(); assert.deepEqual(app.service.view.session, saved);
   pick = (items, options) => options.title === '选择基点' ? items.find(i => i.chooseCommit) : items.find(i => i.oid === f.base);
   await commands.get('codeReview.configure')(); assert.equal(app.service.view.session.base, f.base);
+  const initialSession = app.service.view.session;
+  pick = items => items.find(i => i.source?.kind === 'branch');
+  await commands.get('codeReview.newReview')();
+  assert.equal(app.service.view.session.id, initialSession.id);
   await f.write('src/a.txt', 'review target\n'); await commands.get('codeReview.refresh')();
   const folder = app.tree.nodes.find(n => n.kind === 'folder'), file = folder.children[0];
   await commands.get('codeReview.open')(file); const diff = calls.findLast(c => c[0] === 'vscode.diff');
@@ -173,6 +188,15 @@ test('编辑器适配：入口、两种基点、通知不阻塞、原生 Diff、
   assert.match(errors.at(-1), /评论对象已切换/); assert.ok(app.service.view.notes.comments.some(c => c.id === jump.id));
   await commands.get('codeReview.open')({ path: 'src/a.txt' });
   assert.ok(posts.findLast(p => p.type === 'render').cards.every(c => c.body !== 'directory design feedback'));
+  const retainedSession = app.service.view.session, retainedComment = app.service.view.notes.comments[0];
+  pick = () => undefined;
+  await commands.get('codeReview.newFromCommit')();
+  assert.equal(app.service.view.session.id, retainedSession.id);
+  pick = items => items.find(item => item.oid === retainedSession.base);
+  await commands.get('codeReview.newFromCommit')();
+  assert.equal(app.service.view.session.id, retainedSession.id);
+  assert.ok(app.service.view.notes.comments.some(comment => comment.id === retainedComment.id));
+  await commands.get('codeReview.open')({ path: 'src/a.txt' });
   const oldSession = app.service.view.session, oldModel = posts.findLast(p => p.type === 'render'), oldComment = app.service.view.notes.comments[0];
   assert.equal(app.history.nodes.length, 1);
   const recordItem = app.history.getTreeItem(app.history.nodes[0]);
@@ -209,7 +233,16 @@ test('编辑器适配：入口、两种基点、通知不阻塞、原生 Diff、
   assert.notEqual(calls.findLast(c => c[0] === 'vscode.diff')[1].toString(), firstIncremental[1].toString());
   const manifest = JSON.parse(await fs.readFile(path.join(context.extensionPath, 'package.json'), 'utf8'));
   assert.equal(manifest.contributes.menus['scm/historyItem/context'][0].command, 'codeReview.fromCommit');
+  assert.equal(manifest.contributes.menus['scm/historyItem/context'][0].when, 'scmProvider == git && !listMultiSelection');
+  assert.equal(manifest.contributes.views.codeReview[0].id, 'codeReview.settings');
+  assert.ok(!manifest.contributes.menus['view/title'].some(x => x.when === 'view == codeReview.files' && ['codeReview.repository', 'codeReview.defaultBase', 'codeReview.configure'].includes(x.command)));
   const currentId = app.service.view.session.id;
+  mock.workspace.isTrusted = false;
+  await commands.get('codeReview.newFromCommit')();
+  assert.equal(app.service.view.session.id, currentId); assert.match(errors.at(-1), /信任/);
+  await commands.get('codeReview.fromCommit')({ id: 'git', rootUri: mock.Uri.file(f.root) }, { id: f.base });
+  assert.equal(app.service.view.session.id, currentId); assert.match(errors.at(-1), /信任/);
+  mock.workspace.isTrusted = true;
   await commands.get('codeReview.fromCommit')({ id: 'git', rootUri: mock.Uri.file(f.root) }, { id: 'scm-graph-incoming-changes' });
   assert.equal(app.service.view.session.id, currentId); assert.match(errors.at(-1), /真实提交/);
   await commands.get('codeReview.fromCommit')(undefined, undefined); assert.equal(app.service.view.session.id, currentId);
@@ -244,4 +277,17 @@ test('编辑器适配：入口、两种基点、通知不阻塞、原生 Diff、
   }
   assert.equal((await app.service.comments.load()).comments.length, 0);
   await assert.rejects(fs.stat(app.service.state.location(oldSession)), { code: 'ENOENT' });
+  const otherDirectory = path.join(context.globalStorageUri.fsPath, hash(other.root));
+  const catalogPath = path.join(otherDirectory, 'reviews.json'), savedCatalog = await fs.readFile(catalogPath);
+  await fs.writeFile(catalogPath, 'invalid');
+  pick = items => items.find(item => item.repo?.root === other.root);
+  await commands.get('codeReview.repository')();
+  assert.equal(app.service.repo.root, other.root);
+  assert.ok(app.settings.nodes[0].tooltip.startsWith(other.root));
+  assert.equal(app.settings.nodes[1].description, '读取失败');
+  await fs.writeFile(catalogPath, savedCatalog);
+  await fs.writeFile(path.join(otherDirectory, 'default-base.json'), 'invalid');
+  await commands.get('codeReview.refresh')();
+  assert.ok(app.settings.nodes[0].tooltip.startsWith(other.root));
+  assert.equal(app.settings.nodes[1].description, '读取失败');
 });
