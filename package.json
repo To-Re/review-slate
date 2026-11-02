@@ -1,0 +1,425 @@
+{
+  "name": "code-review",
+  "displayName": "ReviewSlate",
+  "description": "在编辑器里审阅文件变更、留下批注并交给 Agent 处理。固定基点，保存进度，无需服务器。",
+  "version": "1.0.0",
+  "publisher": "to-re",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.107.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "extensionKind": [
+    "workspace"
+  ],
+  "main": "./dist/extension.js",
+  "activationEvents": [
+    "onView:codeReview.files",
+    "onView:codeReview.comments",
+    "onView:codeReview.reviews"
+  ],
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": false
+    },
+    "virtualWorkspaces": false
+  },
+  "scripts": {
+    "compile": "tsc -p .",
+    "test": "npm run compile && node --test test/*.test.cjs",
+    "package": "npm run compile && node scripts/package.cjs",
+    "vscode:prepublish": "npm run compile"
+  },
+  "contributes": {
+    "views": {
+      "codeReview": [
+        {
+          "id": "codeReview.reviews",
+          "name": "审阅记录",
+          "when": "isWorkspaceTrusted"
+        },
+        {
+          "id": "codeReview.files",
+          "name": "变更文件",
+          "icon": "$(checklist)",
+          "when": "isWorkspaceTrusted"
+        },
+        {
+          "id": "codeReview.comments",
+          "name": "审阅评论",
+          "type": "webview",
+          "when": "isWorkspaceTrusted"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "codeReview.configure",
+        "title": "ReviewSlate：选择基点",
+        "icon": "$(git-commit)"
+      },
+      {
+        "command": "codeReview.repository",
+        "title": "ReviewSlate：选择仓库",
+        "icon": "$(repo)"
+      },
+      {
+        "command": "codeReview.refresh",
+        "title": "ReviewSlate：刷新",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "codeReview.open",
+        "title": "ReviewSlate：打开完整 Diff",
+        "icon": "$(diff)"
+      },
+      {
+        "command": "codeReview.since",
+        "title": "ReviewSlate：查看上次审阅后的变化",
+        "icon": "$(history)"
+      },
+      {
+        "command": "codeReview.mark",
+        "title": "ReviewSlate：标记已审",
+        "icon": "$(check)"
+      },
+      {
+        "command": "codeReview.unmark",
+        "title": "ReviewSlate：取消已审标记",
+        "icon": "$(circle-slash)"
+      },
+      {
+        "command": "codeReview.comment",
+        "title": "ReviewSlate：查看文件评论",
+        "icon": "$(comment-discussion)"
+      },
+      {
+        "command": "codeReview.commentSelection",
+        "title": "ReviewSlate：评论所选内容",
+        "icon": "$(comment-add)"
+      },
+      {
+        "command": "codeReview.handoff",
+        "title": "ReviewSlate：复制交给 Agent 的说明",
+        "icon": "$(copy)"
+      },
+      {
+        "command": "codeReview.pending",
+        "title": "ReviewSlate：查看待处理评论",
+        "icon": "$(checklist)"
+      },
+      {
+        "command": "codeReview.defaultBase",
+        "title": "ReviewSlate：设置本仓库默认基点",
+        "icon": "$(settings-gear)"
+      },
+      {
+        "command": "codeReview.copyBase",
+        "title": "ReviewSlate：复制对比起点的完整 SHA",
+        "icon": "$(copy)"
+      },
+      {
+        "command": "codeReview.commentDirectory",
+        "title": "ReviewSlate：评论此目录",
+        "icon": "$(comment-add)"
+      },
+      {
+        "command": "codeReview.openReview",
+        "title": "ReviewSlate：打开审阅记录",
+        "icon": "$(history)"
+      },
+      {
+        "command": "codeReview.deleteReview",
+        "title": "ReviewSlate：归档这条 CR",
+        "icon": "$(archive)"
+      },
+      {
+        "command": "codeReview.restoreReview",
+        "title": "ReviewSlate：恢复这条 CR",
+        "icon": "$(discard)"
+      },
+      {
+        "command": "codeReview.expandAll",
+        "title": "ReviewSlate：展开全部目录",
+        "icon": "$(expand-all)"
+      },
+      {
+        "command": "codeReview.collapseAll",
+        "title": "ReviewSlate：折叠全部目录",
+        "icon": "$(collapse-all)"
+      },
+      {
+        "command": "codeReview.purgeReview",
+        "title": "ReviewSlate：永久删除这条 CR…",
+        "icon": "$(trash)"
+      },
+      {
+        "command": "codeReview.fromCommit",
+        "title": "以此提交为基点创建 CR",
+        "icon": "$(git-commit)"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "codeReview.configure",
+          "when": "view == codeReview.files",
+          "group": "navigation@1"
+        },
+        {
+          "command": "codeReview.repository",
+          "when": "view == codeReview.files",
+          "group": "settings@2"
+        },
+        {
+          "command": "codeReview.refresh",
+          "when": "view == codeReview.files",
+          "group": "navigation@4"
+        },
+        {
+          "command": "codeReview.handoff",
+          "when": "view == codeReview.comments",
+          "group": "navigation@1"
+        },
+        {
+          "command": "codeReview.pending",
+          "when": "view == codeReview.comments",
+          "group": "navigation@2"
+        },
+        {
+          "command": "codeReview.defaultBase",
+          "when": "view == codeReview.files",
+          "group": "settings@1"
+        },
+        {
+          "command": "codeReview.expandAll",
+          "when": "view == codeReview.files",
+          "group": "navigation@2"
+        },
+        {
+          "command": "codeReview.collapseAll",
+          "when": "view == codeReview.files",
+          "group": "navigation@3"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "codeReview.mark",
+          "when": "view == codeReview.files && viewItem =~ /^review/",
+          "group": "inline@1"
+        },
+        {
+          "command": "codeReview.unmark",
+          "when": "view == codeReview.files && viewItem =~ /^review/",
+          "group": "review@2"
+        },
+        {
+          "command": "codeReview.open",
+          "when": "view == codeReview.files && viewItem == reviewFile",
+          "group": "review@3"
+        },
+        {
+          "command": "codeReview.since",
+          "when": "view == codeReview.files && viewItem == reviewFile",
+          "group": "review@4"
+        },
+        {
+          "command": "codeReview.comment",
+          "when": "view == codeReview.files && (viewItem == reviewFile || viewItem == commentFile)",
+          "group": "review@5"
+        },
+        {
+          "command": "codeReview.copyBase",
+          "when": "view == codeReview.files && viewItem == comparisonBase",
+          "group": "inline@1"
+        },
+        {
+          "command": "codeReview.copyBase",
+          "when": "view == codeReview.files && viewItem == comparisonBase",
+          "group": "base@1"
+        },
+        {
+          "command": "codeReview.commentDirectory",
+          "when": "view == codeReview.files && viewItem == reviewDirectory",
+          "group": "inline@2"
+        },
+        {
+          "command": "codeReview.commentDirectory",
+          "when": "view == codeReview.files && viewItem == reviewDirectory",
+          "group": "review@5"
+        },
+        {
+          "command": "codeReview.deleteReview",
+          "when": "view == codeReview.reviews && viewItem == savedReview",
+          "group": "inline@1"
+        },
+        {
+          "command": "codeReview.deleteReview",
+          "when": "view == codeReview.reviews && viewItem == savedReview",
+          "group": "review@1"
+        },
+        {
+          "command": "codeReview.restoreReview",
+          "when": "view == codeReview.reviews && viewItem == deletedReview",
+          "group": "inline@1"
+        },
+        {
+          "command": "codeReview.restoreReview",
+          "when": "view == codeReview.reviews && viewItem == deletedReview",
+          "group": "review@1"
+        },
+        {
+          "command": "codeReview.purgeReview",
+          "when": "view == codeReview.reviews && (viewItem == savedReview || viewItem == deletedReview || viewItem == purgePendingReview)",
+          "group": "danger@1"
+        }
+      ],
+      "editor/context": [
+        {
+          "command": "codeReview.commentSelection",
+          "when": "codeReview.commentable",
+          "group": "codeReview@1"
+        }
+      ],
+      "scm/historyItem/context": [
+        {
+          "command": "codeReview.fromCommit",
+          "when": "scmProvider == git && !listMultiSelection && isWorkspaceTrusted",
+          "group": "5_compare@4"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "codeReview.fromCommit",
+          "when": "false"
+        }
+      ]
+    },
+    "viewsWelcome": [
+      {
+        "view": "codeReview.files",
+        "contents": "选一个固定基点，持续审阅当前分支和工作区。\n[选择基点](command:codeReview.configure)"
+      },
+      {
+        "view": "codeReview.reviews",
+        "contents": "每个分支、每个固定基点分别保存进度与评论。\n[选择基点，开始审阅](command:codeReview.configure)"
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "codeReview",
+          "title": "ReviewSlate",
+          "icon": "media/review.svg"
+        }
+      ]
+    },
+    "colors": [
+      {
+        "id": "codeReview.addedForeground",
+        "description": "ReviewSlate：新增文件",
+        "defaults": {
+          "light": "#16753A",
+          "dark": "#79D69A",
+          "highContrast": "#79D69A",
+          "highContrastLight": "#16753A"
+        }
+      },
+      {
+        "id": "codeReview.modifiedForeground",
+        "description": "ReviewSlate：修改文件",
+        "defaults": {
+          "light": "#174AC5",
+          "dark": "#8FB9FF",
+          "highContrast": "#8FB9FF",
+          "highContrastLight": "#174AC5"
+        }
+      },
+      {
+        "id": "codeReview.deletedForeground",
+        "description": "ReviewSlate：删除文件",
+        "defaults": {
+          "light": "#BD3446",
+          "dark": "#FF98A6",
+          "highContrast": "#FF98A6",
+          "highContrastLight": "#BD3446"
+        }
+      },
+      {
+        "id": "codeReview.changedForeground",
+        "description": "ReviewSlate：需要复审或未保存",
+        "defaults": {
+          "light": "#9B5500",
+          "dark": "#FFC177",
+          "highContrast": "#FFC177",
+          "highContrastLight": "#9B5500"
+        }
+      },
+      {
+        "id": "codeReview.commentForeground",
+        "description": "ReviewSlate：保留的评论",
+        "defaults": {
+          "light": "#7540B6",
+          "dark": "#C9ABFF",
+          "highContrast": "#C9ABFF",
+          "highContrastLight": "#7540B6"
+        }
+      },
+      {
+        "id": "codeReview.folderForeground",
+        "description": "ReviewSlate：目录图标",
+        "defaults": {
+          "light": "#986817",
+          "dark": "#DFB562",
+          "highContrast": "#DFB562",
+          "highContrastLight": "#986817"
+        }
+      },
+      {
+        "id": "codeReview.errorForeground",
+        "description": "ReviewSlate：读取失败",
+        "defaults": {
+          "light": "#BD3446",
+          "dark": "#FF98A6",
+          "highContrast": "#FF98A6",
+          "highContrastLight": "#BD3446"
+        }
+      }
+    ]
+  },
+  "overrides": {
+    "@azure/identity": "4.13.0",
+    "uuid": "11.1.1",
+    "minimatch": "11.0.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/vscode": "1.107.0",
+    "@vscode/vsce": "4.1.0",
+    "typescript": "~5.9.3"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/To-Re/review-slate.git"
+  },
+  "homepage": "https://github.com/To-Re/review-slate#readme",
+  "bugs": {
+    "url": "https://github.com/To-Re/review-slate/issues"
+  },
+  "keywords": [
+    "review",
+    "diff",
+    "annotations",
+    "local-first",
+    "agent"
+  ],
+  "files": [
+    "dist/*.js",
+    "media/**",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE"
+  ]
+}

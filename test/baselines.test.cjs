@@ -1,0 +1,63 @@
+const { test } = require('node:test'), assert = require('node:assert/strict');
+const path = require('node:path'), { execFileSync } = require('node:child_process');
+const { fixture, env } = require('./fixtures.cjs');
+const { baselineOptions } = require('../dist/baselines');
+const { ReviewState } = require('../dist/state');
+
+test('本地主分支和远端主分支同时明确可选，自动默认遵循 upstream / origin 优先级', async t => {
+  const f = await fixture(t);
+  f.git('update-ref', 'refs/remotes/origin/main', f.base);
+  f.git('symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/main');
+  let refs = await f.repo.mainReferences();
+  let choices = baselineOptions(refs);
+  assert.deepEqual(choices.map(item => item.label), ['远端主分支 · origin/main', '本地主分支 · main', '选择一个提交…']);
+  f.git('update-ref', 'refs/remotes/upstream/develop', f.base);
+  f.git('symbolic-ref', 'refs/remotes/upstream/HEAD', 'refs/remotes/upstream/develop');
+  refs = await f.repo.mainReferences();
+  assert.equal(refs.preferred.ref, 'refs/remotes/upstream/develop');
+  assert.equal(refs.localMain.ref, 'refs/heads/main');
+  choices = baselineOptions(refs, { kind: 'branch', ref: 'refs/heads/main', label: 'main' });
+  assert.equal(choices[0].source.ref, 'refs/heads/main'); assert.equal(choices[0].description, '本仓库默认');
+});
+test('主干检测的逐级回退：远端 HEAD、远端 main/master、本地 main/master', async t => {
+  const f = await fixture(t);
+  f.git('update-ref', 'refs/remotes/upstream/master', f.base);
+  f.git('update-ref', 'refs/remotes/origin/develop', f.base); f.git('symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/develop');
+  assert.equal((await f.repo.mainReferences()).preferred.ref, 'refs/remotes/origin/develop');
+  f.git('symbolic-ref', '--delete', 'refs/remotes/origin/HEAD');
+  assert.equal((await f.repo.mainReferences()).preferred.ref, 'refs/remotes/upstream/master');
+  f.git('update-ref', '-d', 'refs/remotes/upstream/master');
+  assert.equal((await f.repo.mainReferences()).preferred.ref, 'refs/heads/main');
+  f.git('branch', '-m', 'main', 'master');
+  assert.equal((await f.repo.mainReferences()).localMain.ref, 'refs/heads/master');
+});
+test('每仓库默认独立保存，设置默认不改变当前固定基点或进度', async t => {
+  const a = await fixture(t), b = await fixture(t);
+  await a.choose(); await a.write('src/a.txt', 'reviewed'); await a.service.refresh(); await a.mark(['src/a.txt']);
+  const session = a.service.view.session;
+  a.git('update-ref', 'refs/remotes/origin/main', a.base);
+  const source = { kind: 'branch', ref: 'refs/remotes/origin/main', label: 'origin/main' };
+  await a.service.state.setDefaultBase(source);
+  assert.deepEqual(await a.service.state.active(), session);
+  assert.equal(a.service.view.files[0].status, 'reviewed');
+  const otherRepository = new ReviewState(a.storage, b.root);
+  assert.equal(await otherRepository.defaultBase(), undefined);
+  const reopened = new ReviewState(a.storage, a.root);
+  assert.deepEqual(await reopened.defaultBase(), source);
+  const script = "const {ReviewState}=require('./dist/state');new ReviewState(process.argv[1],process.argv[2]).defaultBase().then(x=>process.stdout.write(JSON.stringify(x))).catch(e=>{console.error(e);process.exit(1)})";
+  const restored = JSON.parse(execFileSync(process.execPath, ['-e', script, a.storage, a.root], { cwd: path.resolve(__dirname, '..'), env, encoding: 'utf8' }));
+  assert.deepEqual(restored, source);
+});
+test('自定义分支或固定提交默认置顶，换默认不重写评论或创建新审阅', async t => {
+  const f = await fixture(t);
+  const source = { kind: 'commit', ref: f.base, label: f.base.slice(0, 10) };
+  await f.service.state.setDefaultBase(source);
+  assert.equal(await f.service.state.active(), undefined);
+  const choices = baselineOptions(await f.repo.mainReferences(), source);
+  assert.equal(choices[0].source.ref, f.base); assert.match(choices[0].label, /指定提交/);
+  assert.ok(choices.some(choice => choice.label === '本地主分支 · main'));
+  const branch = { kind: 'branch', ref: 'refs/heads/feature', label: 'feature' };
+  await f.service.state.setDefaultBase(branch);
+  assert.equal(baselineOptions(await f.repo.mainReferences(), await f.service.state.defaultBase())[0].source.ref, branch.ref);
+  assert.equal(await f.service.state.active(), undefined);
+});
