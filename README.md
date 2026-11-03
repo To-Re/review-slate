@@ -8,20 +8,17 @@ ReviewSlate is a local Git review extension for VS Code-compatible desktop edito
 
 ReviewSlate 以 VSIX 分发，面向 VS Code、Trae 和 Trae CN 桌面编辑器。本仓库 `main` 维护这一扩展。
 
-| 版本 | 状态与入口 |
-| --- | --- |
-| **1.0.1** | 当前公开版本，从 [Release](https://github.com/To-Re/review-slate/releases/tag/v1.0.1) 下载 `review-slate-1.0.1.vsix` |
-| **1.0.2** | 当前源码中的修复候选，优化首次生成变更树和打开 Diff；尚未发布，改动见 [CHANGELOG](CHANGELOG.md) |
+当前正式版为 **1.0.2**（2026-11-03），从 [1.0.2 Release](https://github.com/To-Re/review-slate/releases/tag/v1.0.2) 下载 `review-slate-1.0.2.vsix`。本版优化首次生成变更树和打开 Diff，并修复连续切换文件时评论对象回退的问题，完整改动见 [CHANGELOG](CHANGELOG.md)。
 
 需要支持 VS Code API `^1.107.0` 的编辑器、可运行 Git 的扩展宿主，以及至少有一个提交的 Git 仓库。Trae / Trae CN 的产品版本号不等于内核版本号。扩展仅在受信任的文件系统工作区启用，不支持浏览器版和虚拟工作区。
 
 1. 下载公开版 VSIX，在扩展面板的更多菜单中选择 **Install from VSIX… / 从 VSIX 安装…**，打开下载的文件。
-2. 按提示重载窗口，打开受信任的 Git 项目。
+2. 保存代码与需要保留的评论，重载所有正在使用 ReviewSlate 的编辑器窗口，再打开受信任的 Git 项目。升级只安装 VSIX 还不够，已运行的扩展宿主需要重载才能加载新版。
 3. 从活动栏进入 **ReviewSlate**，在“审阅设置”确认当前仓库。
 
 安装 VSIX 不需要另装 Node.js。扩展 ID 保持为 `to-re.code-review`；从源码构建见[贡献指南](CONTRIBUTING.md)。Remote SSH 工作区需要把扩展安装到远端扩展宿主，并让远端能运行 Git；文件、审阅数据和 Agent 交接路径均属于远端。
 
-1.0.1 的已有实机记录覆盖 macOS / Trae CN 3.4.11（内核 1.107.1）的安装、重载、审阅设置、新建入口、SHA 输入和 Git 图形菜单显示。完整人工审阅流程、VS Code、Trae 和 Remote SSH 尚未完成实机验收；1.0.2 的合成仓库测量也不代表真实编辑器显示耗时。具体版本与覆盖范围见[验证记录](docs/测试/验证记录.md)。
+1.0.2 的实现已在 macOS / Trae CN 3.4.11（内核 1.107.1）定向验证：连续与快速切换文件时，树、Diff 和评论对象一致，目录与待处理模式保持，已有进度可接续。完整人工审阅流程、VS Code、Trae 和 Remote SSH 尚未完成实机验收；合成仓库的性能测量不包含真实编辑器渲染。具体构建与覆盖范围见[验证记录](docs/测试/验证记录.md)。
 
 ## 完成第一轮审阅
 

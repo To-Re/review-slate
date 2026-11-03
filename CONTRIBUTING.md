@@ -20,7 +20,7 @@ npm test
 npm run package
 ```
 
-`npm test` 先编译 TypeScript，再运行 Node.js 内置测试。打包脚本读取 `package.json` 的版本，输出 `artifacts/review-slate-<version>.vsix`；当前源码为 1.0.2，产物为 `artifacts/review-slate-1.0.2.vsix`，仍是未发布候选。构建和测试不会安装扩展或启动编辑器；真实界面验证需另行安装，并使用独立的合成项目。
+`npm test` 先编译 TypeScript，再运行 Node.js 内置测试。打包脚本读取 `package.json` 的版本，输出 `artifacts/review-slate-<version>.vsix`；当前版本为 1.0.2，产物为 `artifacts/review-slate-1.0.2.vsix`，正式安装包见 [1.0.2 Release](https://github.com/To-Re/review-slate/releases/tag/v1.0.2)。构建和测试不会安装扩展或启动编辑器；真实界面验证需另行安装，重载所有相关编辑器窗口后，在独立的合成项目中进行。
 
 模块职责与定向命令见[客户端入口](docs/客户端/README.md)，Git 扫描和调度见[本地审阅引擎](docs/客户端/本地审阅引擎.md)，存储、Agent 回执与恢复见[数据协议](docs/客户端/数据协议.md)。运行时沿用 VS Code API 与 Node.js 内置模块；包内容由 `package.json` 的 `files` 白名单限定，入口为 [`scripts/package.cjs`](scripts/package.cjs)。
 
