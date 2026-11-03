@@ -1,8 +1,12 @@
 # 客户端研发
 
-维护责任：前端／客户端研发；最后核查：2026-11-03。适用范围：ReviewSlate 的 VS Code 系客户端与客户端开发维护。状态：现行。核查基线：`689de24` 的 1.0.1 客户端实现；本次未改实现。来源：[扩展入口](../../src/extension.ts)、[平台声明](../../package.json)、[评论面板](../../src/panel.ts)、[页面脚本](../../media/comments.js)及本文链接的代码。
+维护责任：客户端研发；最后核查：2026-11-03。适用范围：ReviewSlate 的 VS Code 系客户端与 Codex 客户端。状态：VSIX 现行说明；Codex 0.1.2 已通过官方 CLI 更新本地安装并启用，缓存资产与最终审核包一致，目录热区及键盘焦点已在自有测试应用复验。真实 Codex 完整面板、深色与窄窗未覆盖，候选未公开发布。核查基线：`3dd7e30` 加本轮实现。来源：[扩展入口](../../src/extension.ts)、[平台声明](../../package.json)、[Codex 控制器](../../src/codex/controller.ts)、[安装核对](Codex接入.md#正式包与运行时方案)及本文链接的代码。
 
-当前正式客户端是 VSIX。Codex 完整 Git 审阅客户端尚未实现，已有本地合成数据探针，其契约、开发方法与限制由本方向的 [Codex 接入](Codex接入.md)维护。
+正式工具 `mcp__reviewslate__reviewslate_open` 已可发现，旧探针已卸载；工具发现不代表真实 Codex 完整面板已验收。当前公开客户端仍是 VSIX。Codex 已实现一个 MCP App 工作区与本地 stdio，覆盖仓库切换、CR、完整只读 Diff、已审、意见、导航／草稿恢复、中英切换及操作核对；实现和限制见[客户端方案](Codex客户端方案.md)。源码直接编辑暂未启用，真实 Codex 验收未完成。根标准包、Node 捆绑与宿主门槛由 [Codex 接入](Codex接入.md)维护，布局见[数据协议](数据协议.md#codex-独立存储方案)。以下 VSIX 专节描述既有宿主，不能直接当作 Codex 行为。
+
+0.1.2 将单文件 Diff 和草稿保存与整仓扫描分离，后台刷新期间仍可保留输入并切文件；树采用汇总缓存和节点复用，自动刷新按耗时调度。目录展开与已审控件各有独立 32 × 32 px 热区，名称继续打开目录概览。当前行为与边界见[客户端方案](Codex客户端方案.md#四状态归属与连续性)。
+
+正在运行的旧面板不保证自动采用新包。用户应先等页面确认本地保存，再完全退出并重开 Codex；安装流程不代替用户重启宿主，也不清理原审阅资料。
 
 本文负责视图、状态、宿主适配和开发发布入口。业务语义见[产品](../产品/README.md)，视觉与交互规则见[设计](../设计/README.md)，业务模块和持久化见[本地审阅引擎](../客户端/本地审阅引擎.md)及[数据协议](../客户端/数据协议.md)，使用步骤见[用户指南](../用户文档/使用指南.md)。测试方法和版本结果统一由[测试](../测试/README.md)维护，不在客户端文档复制执行记录。
 
@@ -94,7 +98,7 @@ npm run compile
 node --test test/panel.test.cjs test/tree.test.cjs test/editor.test.cjs test/editor-context.test.cjs test/editable.test.cjs
 ```
 
-代码或打包修改提交前执行 `npm test` 与 `npm run package`；实际执行范围和结果写入[测试](../测试/README.md)。模拟宿主与 DOM 检查状态及消息，原生窗口、快捷键、真实主题和 Remote SSH 另做实机验证。本次是文档核查，没有重跑 VSIX 测试。仓库尚无 `.vscode/launch.json` 或 `tasks.json`，没有现成 F5 配置；当前预览方式是构建 VSIX、安装到获准的测试编辑器并使用合成仓库。
+代码或打包修改提交前执行 `npm test` 与 `npm run package`；实际执行范围和结果写入[测试](../测试/README.md)。模拟宿主与 DOM 检查状态及消息，原生窗口、快捷键、真实主题和 Remote SSH 另做实机验证。Codex 使用 `npm run typecheck:codex-ui`、`npm run test:codex`、`npm run build:codex` 独立验证。仓库尚无 `.vscode/launch.json` 或 `tasks.json`，没有现成 F5 配置；测试不得隐式安装或打开编辑器。
 
 [`scripts/package.cjs`](../../scripts/package.cjs) 从 `package.json` 取版本，输出 `artifacts/review-slate-<version>.vsix`；分发内容由 `files` 白名单限定。构建不自动安装或打开编辑器。按[用户指南](../用户文档/使用指南.md)安装重载后，核对版本、四个视图及本次受影响交互；签名、构建成功与目标宿主可用分别记录。
 

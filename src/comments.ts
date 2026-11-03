@@ -35,7 +35,7 @@ function excerpt(text: string, limit = 512): string {
 }
 interface PendingIdentity { owner?: string; comments: string[]; stat: Stats }
 /** Modern ownership is in a fixed header, never in quoted comment text. Older ownerless lists need all IDs. */
-async function pendingIdentity(file: string): Promise<PendingIdentity> {
+async function pendingIdentity(file: string, introduction = pendingIntroduction): Promise<PendingIdentity> {
   const result = await inspectFile(file, async (handle, stat) => {
     const prefix = Buffer.alloc(Math.min(stat.size, 4096));
     let offset = 0;
@@ -46,7 +46,7 @@ async function pendingIdentity(file: string): Promise<PendingIdentity> {
     }
     const text = prefix.toString('utf8'), title = '# 待处理审阅意见\n\n';
     if (!text.startsWith(title)) throw new Error('无法确认交接清单归属，未清理：' + file);
-    const header = text.slice(title.length), body = header.startsWith(pendingIntroduction + '\n\n') ? header.slice(pendingIntroduction.length + 2) : header;
+    const header = text.slice(title.length), body = header.startsWith(introduction + '\n\n') ? header.slice(introduction.length + 2) : header;
     const owner = /^CR：([a-f0-9]{64})\n/.exec(body)?.[1];
     if (owner) return { owner, comments: [] };
     if (body.startsWith('CR：')) throw new Error('交接清单 CR 标识无效，未清理：' + file);
@@ -124,28 +124,50 @@ const guide = [
   'deleted/ 是用户删除评论的恢复区，不属于待处理意见；不要处理或自动恢复其中的评论。', '',
   '每一轮 CR 都有独立的 reviews/<CR ID>/REVIEW.json 和 PENDING.md。只处理用户交接的这一轮；先确认 REVIEW.json 中的分支、固定基点和删除状态。CR 已删除或当前检出的分支不符时停止，不处理其他 CR，不自动切分支。目录中的其他意见不表示本轮任务。', ''
 ].join('\n');
+export interface CommentRepositoryOptions { folder?: string; owner?: string; ignoreFolder?: string }
 export class CommentRepository {
   readonly folder: string;
+  readonly relativeFolder: string;
+  private readonly ownerId: string;
+  private readonly ignoreFolder: string;
+  private readonly introduction: string;
   private session?: Session;
-  constructor(readonly root: string) { this.folder = path.join(root, NOTES_FOLDER); }
+  constructor(readonly root: string, options: CommentRepositoryOptions = {}) {
+    this.relativeFolder = options.folder || NOTES_FOLDER;
+    checkPath(this.relativeFolder);
+    this.ownerId = options.owner || 'to-re.code-review';
+    this.ignoreFolder = options.ignoreFolder || this.relativeFolder;
+    this.folder = path.join(root, this.relativeFolder);
+    this.introduction = pendingIntroduction.replaceAll(NOTES_FOLDER, this.relativeFolder);
+  }
+  private validateComment = (value: unknown): ReviewComment => {
+    const comment = commentData(value);
+    if (comment.path === this.ignoreFolder || comment.path.startsWith(this.ignoreFolder + '/')) throw new Error('不能评论工具数据目录');
+    return comment;
+  };
+  async read(session?: Session, includeArchived = false): Promise<Notes> {
+    this.session = session;
+    return notesFor(await this.load(), includeArchived && session ? { ...session, deletedAt: undefined } : session);
+  }
+  async initialize(): Promise<void> { await this.prepare(true); }
   private owner(comment: ReviewComment): Session {
     if (this.session && [this.session.id, ...(this.session.commentScopes || [])].includes(comment.scope)) return this.session;
     return { id: comment.scope, base: comment.comparison.base, label: '评论所属审阅', createdAt: comment.createdAt };
   }
   private async prepare(create: boolean): Promise<boolean> {
-    if (!await directory(this.root, NOTES_FOLDER, create)) return false;
+    if (!await directory(this.root, this.relativeFolder, create)) return false;
     const manifestPath = path.join(this.folder, 'project.json');
     const manifest = await readJson(manifestPath, value => {
       const item = value as { owner: string; version: number };
-      if (!item || item.owner !== 'to-re.code-review' || item.version !== 1) throw new Error('该目录属于其他工具，未覆盖');
+      if (!item || item.owner !== this.ownerId || item.version !== 1) throw new Error('该目录属于其他工具，未覆盖');
       return item;
     });
     if (!manifest) {
-      if (!create || (await fs.readdir(this.folder)).length) throw new Error('.code-review 已有内容但缺少工具标识，未覆盖');
-      await saveJson(manifestPath, { owner: 'to-re.code-review', version: 1 });
+      if (!create || (await fs.readdir(this.folder)).length) throw new Error(this.relativeFolder + ' 已有内容但缺少工具标识，未覆盖');
+      await saveJson(manifestPath, { owner: this.ownerId, version: 1 });
     }
-    await directory(this.root, NOTES_FOLDER + '/comments', create);
-    await directory(this.root, NOTES_FOLDER + '/replies', create);
+    await directory(this.root, this.relativeFolder + '/comments', create);
+    await directory(this.root, this.relativeFolder + '/replies', create);
     return true;
   }
   private async purged(): Promise<PurgedNotes> {
@@ -170,7 +192,7 @@ export class CommentRepository {
       const id = file.slice(0, -5);
       if (!uuid(id)) throw new Error('评论文件名无效');
       if (purged.has(id)) continue;
-      const comment = await readJson(path.join(this.folder, 'comments', file), commentData);
+      const comment = await readJson(path.join(this.folder, 'comments', file), this.validateComment);
       if (!comment || comment.id !== id) throw new Error('评论 ID 与文件名不一致');
       result.comments.push(comment);
       const reply = await readJson(path.join(this.folder, 'replies', file), replyData);
@@ -180,14 +202,14 @@ export class CommentRepository {
       }
     }
     result.comments.sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
-    if (await directory(this.root, NOTES_FOLDER + '/deleted', false)) {
+    if (await directory(this.root, this.relativeFolder + '/deleted', false)) {
       const deleted = (await fs.readdir(path.join(this.folder, 'deleted'))).filter(file => file.endsWith('.json')).sort();
       if (deleted.length > 2000) throw new Error('已删除评论超过 2000 条，请在审阅记录中永久删除不再需要的 CR；归档不会释放容量');
       for (const file of deleted) {
         const id = file.slice(0, -5);
         if (!uuid(id)) throw new Error('已删除评论文件名无效');
         if (purged.has(id)) continue;
-        const comment = await readJson(path.join(this.folder, 'deleted', file), commentData);
+        const comment = await readJson(path.join(this.folder, 'deleted', file), this.validateComment);
         if (!comment || comment.id !== id || result.comments.some(item => item.id === id)) throw new Error('已删除评论与当前评论冲突，请检查原文件');
         result.deleted!.push(comment);
       }
@@ -197,7 +219,7 @@ export class CommentRepository {
   async add(session: Session, file: string, pair: Pair, body: string, anchor?: Anchor, requestId?: string, target: 'file' | 'directory' = 'file', beforeWrite?: () => Promise<void>): Promise<ReviewComment> {
     const now = new Date().toISOString();
     if (requestId !== undefined && !uuid(requestId)) throw new Error('评论请求标识无效');
-    const comment = commentData({
+    const comment = this.validateComment({
       version: 1, id: requestId || randomUUID(), revision: randomUUID(), path: file,
       scope: session.id, comparison: comparisonFor(session), body: body.trim(),
       createdAt: now, updatedAt: now, state: 'open',
@@ -208,7 +230,7 @@ export class CommentRepository {
       await beforeWrite?.();
       await this.assertRetained(session.id);
       if (Object.values((await this.purged()).reviews).some(entry => entry.comments.includes(comment.id))) throw new Error('此评论请求已永久删除，请重新输入评论');
-      await ensureNotesIgnored(this.root);
+      await ensureNotesIgnored(this.root, this.ignoreFolder);
       const data = await this.load();
       if (data.deleted?.some(item => item.id === comment.id)) throw new Error('这条评论已删除，请撤销删除或重新输入评论');
       const duplicate = data.comments.find(c => c.id === comment.id);
@@ -233,7 +255,7 @@ export class CommentRepository {
       if (change.body !== undefined && change.body.trim() !== comment.body) { comment.body = change.body.trim(); comment.revision = randomUUID(); }
       if (change.state === 'open' && comment.state === 'resolved') comment.revision = randomUUID();
       if (change.state) comment.state = change.state;
-      comment.updatedAt = new Date().toISOString(); commentData(comment);
+      comment.updatedAt = new Date().toISOString(); this.validateComment(comment);
       await saveJson(path.join(this.folder, 'comments', id + '.json'), comment);
       await this.publish(data, this.owner(comment));
     });
@@ -243,7 +265,7 @@ export class CommentRepository {
     if (!await this.prepare(false)) return { comments: [], replies: new Map(), deleted: [] };
     return locked(this.folder, async () => {
       await beforePublish?.();
-      await ensureNotesIgnored(this.root);
+      await ensureNotesIgnored(this.root, this.ignoreFolder);
       const data = await this.load();
       for (const review of sessions) if (review.id !== session?.id) await this.publish(data, review, false);
       await this.publish(data, session); return notesFor(data, session);
@@ -258,12 +280,12 @@ export class CommentRepository {
     if (removedIds) {
       for (const id of identity.comments) owned.push(removedIds.has(id));
     } else {
-      const purged = await this.purged(), deleted = await directory(this.root, NOTES_FOLDER + '/deleted');
+      const purged = await this.purged(), deleted = await directory(this.root, this.relativeFolder + '/deleted');
       for (const id of identity.comments) {
         const owners = new Set<string>();
         for (const entry of Object.values(purged.reviews)) if (entry.comments.includes(id)) for (const scope of entry.scopes) owners.add(scope);
         for (const folder of deleted ? ['comments', 'deleted'] : ['comments']) {
-          const comment = await readJson(path.join(this.folder, folder, id + '.json'), commentData);
+          const comment = await readJson(path.join(this.folder, folder, id + '.json'), this.validateComment);
           if (comment) {
             if (comment.id !== id) throw new Error('评论 ID 与文件名不一致');
             owners.add(comment.scope);
@@ -288,11 +310,11 @@ export class CommentRepository {
       // The convenience copy may be the only handoff produced by pre-v3 versions.
       const rootPending = path.join(this.folder, 'PENDING.md');
       let identity: PendingIdentity | undefined;
-      try { identity = await pendingIdentity(rootPending); } catch (error) { if (!missing(error)) throw error; }
+      try { identity = await pendingIdentity(rootPending, this.introduction); } catch (error) { if (!missing(error)) throw error; }
       if (!identity || await this.ownsPending(identity, new Set(scopes))) await writeChanged(rootPending, blocked, identity?.stat || null);
       for (const id of scopes) {
         const review = { ...session, id };
-        await directory(this.root, NOTES_FOLDER + '/reviews/' + id, true);
+        await directory(this.root, this.relativeFolder + '/reviews/' + id, true);
         await writeChanged(this.reviewFile(review), JSON.stringify({ version: 1, id, branch: session.branch || null, base: session.base, deleted: true, purged: true }, null, 2) + '\n');
         await writeChanged(this.pendingFile(review), blocked);
       }
@@ -307,11 +329,11 @@ export class CommentRepository {
       const ids = new Set(marker.reviews[session.id]?.comments || []), owners = new Map<string, Set<string>>();
       const commentFile = /^([a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12})\.json(?:\.bak)?(?:\.[a-f0-9-]{36}\.tmp)?$/;
       for (const folder of ['comments', 'deleted']) {
-        if (!await directory(this.root, NOTES_FOLDER + '/' + folder)) continue;
+        if (!await directory(this.root, this.relativeFolder + '/' + folder)) continue;
         for (const name of await fs.readdir(path.join(this.folder, folder))) {
           const match = commentFile.exec(name);
           if (!match || ids.has(match[1])) continue;
-          const comment = commentData(JSON.parse((await readBytes(path.join(this.folder, folder, name), 16 * 1024 * 1024)).toString('utf8')));
+          const comment = this.validateComment(JSON.parse((await readBytes(path.join(this.folder, folder, name), 16 * 1024 * 1024)).toString('utf8')));
           if (comment.id !== match[1]) throw new Error('评论 ID 与文件名不一致');
           const owned = owners.get(comment.id) || new Set<string>(); owned.add(comment.scope); owners.set(comment.id, owned);
         }
@@ -324,7 +346,7 @@ export class CommentRepository {
       // This content-free journal needs an atomic checkpoint, not a recoverable copy of removed content.
       await writeChanged(path.join(this.folder, 'purged.json'), JSON.stringify(marker, null, 2) + '\n');
       for (const folder of ['comments', 'deleted', 'replies']) {
-        if (!await directory(this.root, NOTES_FOLDER + '/' + folder)) continue;
+        if (!await directory(this.root, this.relativeFolder + '/' + folder)) continue;
         for (const name of await fs.readdir(path.join(this.folder, folder))) {
           const match = commentFile.exec(name);
           if (!match || !ids.has(match[1])) continue;
@@ -334,14 +356,14 @@ export class CommentRepository {
         }
       }
       for (const scope of scopes) {
-        const relative = NOTES_FOLDER + '/reviews/' + scope;
+        const relative = this.relativeFolder + '/reviews/' + scope;
         if (await directory(this.root, relative)) await fs.rm(path.join(this.root, relative), { recursive: true, force: true });
       }
       // The root handoff may still be a copy of the removed CR, including an interrupted atomic-write temporary.
       for (const name of await fs.readdir(this.folder)) if (/^PENDING\.md(?:\.bak)?(?:\.[a-f0-9-]{36}\.tmp)?$/.test(name)) {
         const file = path.join(this.folder, name);
         let identity: PendingIdentity;
-        try { identity = await pendingIdentity(file); }
+        try { identity = await pendingIdentity(file, this.introduction); }
         catch (error) { if (missing(error)) continue; throw error; }
         if (await this.ownsPending(identity, scopes, ids)) await removeUnchanged(file, identity.stat);
       }
@@ -365,7 +387,7 @@ export class CommentRepository {
         const reply = await readJson(path.join(this.folder, 'replies', id + '.json'), replyData);
         if (reply && reply.commentId !== id) throw new Error('回复与评论 ID 不一致');
       }
-      await directory(this.root, NOTES_FOLDER + '/deleted', true);
+      await directory(this.root, this.relativeFolder + '/deleted', true);
       const active = path.join(this.folder, 'comments', id + '.json'), deleted = path.join(this.folder, 'deleted', id + '.json');
       await moveStoredFile(restore ? deleted : active, restore ? active : deleted);
       await this.publish(await this.load(), this.owner(current));
@@ -376,7 +398,7 @@ export class CommentRepository {
   private async publish(data: Notes, session?: Session, root = true): Promise<void> {
     if (session && Object.values((await this.purged()).reviews).some(entry => entry.scopes.includes(session.id))) return;
     const scoped = notesFor(data, session), open = scoped.comments.filter(comment => comment.state === 'open');
-    const lines = ['# 待处理审阅意见', '', pendingIntroduction, '',
+    const lines = ['# 待处理审阅意见', '', this.introduction, '',
       ...(session ? ['CR：' + session.id, '分支：' + excerpt(session.branch?.label || '旧版未记录', 256), '固定基点：' + excerpt(session.base, 128),
         ...(session.deletedAt ? ['此 CR 已删除，禁止处理；用户撤销删除后才能继续。'] : [])] : ['当前分支尚未选择 CR，其他 CR 的意见仍保留。']),
       '', '未解决评论：' + open.length, '',
@@ -387,8 +409,8 @@ export class CommentRepository {
     for (const comment of open) {
       const directory = comment.target === 'directory', reply = scoped.replies.get(comment.id);
       const index = ['## ' + comment.id, '', '评论版本：' + comment.revision, '状态：' + noteStatus(comment, reply),
-        '完整评论（含比较与选区）：' + NOTES_FOLDER + '/comments/' + comment.id + '.json',
-        ...(reply ? ['完整回复：' + NOTES_FOLDER + '/replies/' + comment.id + '.json'] : []), ''].join('\n') + '\n';
+        '完整评论（含比较与选区）：' + this.relativeFolder + '/comments/' + comment.id + '.json',
+        ...(reply ? ['完整回复：' + this.relativeFolder + '/replies/' + comment.id + '.json'] : []), ''].join('\n') + '\n';
       const detail = [(directory ? '目录：' : '文件：') + JSON.stringify(excerpt(comment.path + (directory ? '/' : ''), 1024)),
         (directory ? '目录绝对路径：' : '文件绝对路径：') + JSON.stringify(excerpt(path.join(this.root, comment.path), 1024)),
         ...(directory ? ['评论范围：该目录及其子目录的整体意见；不绑定某个文件或代码行。'] : []),
@@ -411,11 +433,11 @@ export class CommentRepository {
     }
     if (session) {
       if (!isHash(session.id)) throw new Error('CR 标识无效');
-      await directory(this.root, NOTES_FOLDER + '/reviews/' + session.id, true);
+      await directory(this.root, this.relativeFolder + '/reviews/' + session.id, true);
       await writeChanged(this.reviewFile(session), JSON.stringify({ version: 1, id: session.id, branch: session.branch || null, base: session.base, deleted: !!session.deletedAt }, null, 2) + '\n');
       await writeChanged(this.pendingFile(session), pending);
     }
     if (root) await writeChanged(path.join(this.folder, 'PENDING.md'), pending);
-    await writeChanged(path.join(this.folder, 'README.md'), guide);
+    await writeChanged(path.join(this.folder, 'README.md'), guide.replaceAll(NOTES_FOLDER, this.relativeFolder));
   }
 }

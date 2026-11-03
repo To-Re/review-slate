@@ -1,20 +1,21 @@
-import { CommentRepository, Notes } from './comments';
+import { CommentRepository, CommentRepositoryOptions, Notes } from './comments';
 import { Anchor } from './anchors';
 import { CommitChoice, GitRepository } from './git';
-import { absent, checkPath, hash, isNotes, LegacyComparison, messageOf, Pair, pairId, recordId, ReviewBranch, ReviewFile, ReviewRecords, Session } from './model';
+import { absent, checkPath, hash, LegacyComparison, messageOf, Pair, pairId, recordId, ReviewBranch, ReviewFile, ReviewRecords, Session } from './model';
 import { ReviewState } from './state';
 
 export interface ReviewView { session?: Session; branch?: ReviewBranch; sessions?: Session[]; purgePending?: string[]; baseCommit?: CommitChoice; files: ReviewFile[]; notes: Notes; error?: string }
 export interface Selection { key: string; draftKey: string; legacyDraftKey?: string; session: Session; file: string; pair: Pair; target?: 'directory' }
 export interface MarkRequest { session: string; files: { path: string; fingerprint: string; checked: boolean }[]; directory?: string }
 export interface PurgedReview { session: Session; targets: { path: string; target: 'file' | 'directory' }[] }
+export interface ReviewServiceOptions { comments?: CommentRepositoryOptions; publishOnRefresh?: boolean }
 export class ReviewService {
   readonly state: ReviewState;
   readonly comments: CommentRepository;
   view: ReviewView = { files: [], notes: { comments: [], replies: new Map() } };
   private records: ReviewRecords = Object.create(null);
-  constructor(readonly repo: GitRepository, storage: string) {
-    this.state = new ReviewState(storage, repo.root); this.comments = new CommentRepository(repo.root);
+  constructor(readonly repo: GitRepository, storage: string, private readonly options: ReviewServiceOptions = {}) {
+    this.state = new ReviewState(storage, repo.root); this.comments = new CommentRepository(repo.root, options.comments);
   }
   async start(legacy?: LegacyComparison): Promise<void> {
     await this.state.resume(this.repo, legacy);
@@ -32,7 +33,7 @@ export class ReviewService {
     try {
       const branch = await this.repo.branch(), session = await this.state.active(branch), sessions = await this.state.sessions();
       const purgePending = await this.state.pendingPurges();
-      const notes = await this.comments.sync(session, sessions.filter(item => !purgePending.includes(item.id)), async () => {
+      const notes = this.options.publishOnRefresh === false ? await this.comments.read(session) : await this.comments.sync(session, sessions.filter(item => !purgePending.includes(item.id)), async () => {
         if ((await this.repo.branch()).key !== branch.key || JSON.stringify(await this.state.sessions()) !== JSON.stringify(sessions)) {
           throw new Error('分支或 CR 记录已改变，请刷新后继续');
         }
@@ -77,7 +78,7 @@ export class ReviewService {
     const session = this.view.session;
     const inTree = this.view.files.some(row => row.path.startsWith(file + '/')) ||
       [...this.view.notes.comments, ...(this.view.notes.deleted || [])].some(comment => comment.target === 'directory' && (comment.path === file || comment.path.startsWith(file + '/')));
-    if (this.view.error || !session || isNotes(file) || !inTree) throw new Error('请从审阅树选择一个目录');
+    if (this.view.error || !session || this.repo.excludes(file) || !inTree) throw new Error('请从审阅树选择一个目录');
     return {
       file, session, target: 'directory', pair: { left: absent(), right: absent() },
       key: hash(this.repo.root + '\0' + session.id + '\0directory\0' + file),

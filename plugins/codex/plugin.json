@@ -1,0 +1,32 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "reviewslate",
+  "version": "0.1.2",
+  "description": "Continuous local Git review, persistent progress, comments and agent handoff inside Codex.",
+  "homepage": "https://github.com/To-Re/review-slate",
+  "repository": "https://github.com/To-Re/review-slate",
+  "license": "MIT",
+  "keywords": [
+    "review",
+    "git",
+    "annotations",
+    "local-first"
+  ],
+  "extensions": {
+    "com.openai": {
+      "requires_local_executor": true,
+      "interface": {
+        "displayName": "ReviewSlate",
+        "shortDescription": "Local Git review with persistent progress",
+        "category": "Productivity",
+        "brandColor": "#5940ae",
+        "defaultPrompt": [
+          "Open ReviewSlate",
+          "打开 ReviewSlate"
+        ],
+        "composerIcon": "./assets/composer-icon.png",
+        "logo": "./assets/logo.png"
+      }
+    }
+  }
+}

@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; frame-src reviewslate-test:; connect-src 'none'; base-uri 'none'; form-action 'none'">
+  <title>独立测试宿主 · 非 Codex</title>
+  <style>
+    html, body { margin: 0; height: 100%; overflow: hidden; }
+    iframe { display: block; width: 100%; height: 100%; border: 0; }
+  </style>
+</head>
+<body>
+  <iframe id="workspace" title="ReviewSlate 实际客户端，独立测试宿主，非 Codex" sandbox="allow-scripts"></iframe>
+  <script>
+    (() => {
+      'use strict';
+      const frame = document.getElementById('workspace');
+      window.reviewSlateTestHost = Object.freeze({
+        receive(message) {
+          if (!message || message.jsonrpc !== '2.0') return;
+          frame.contentWindow.postMessage(message, '*');
+        }
+      });
+      window.addEventListener('message', (event) => {
+        if (event.source !== frame.contentWindow) return;
+        const message = event.data;
+        if (!message || message.jsonrpc !== '2.0' || typeof message.method !== 'string') return;
+        window.webkit.messageHandlers.reviewSlateBridge.postMessage(message);
+      });
+      frame.src = 'reviewslate-test://host/ui.html';
+    })();
+  </script>
+</body>
+</html>

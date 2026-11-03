@@ -9,6 +9,7 @@ interface TreeEntry { mode: string; oid: string }
 export interface Reference { name: string; ref: string; remote: boolean }
 export interface MainReferences { branches: Reference[]; preferred?: Reference; localMain?: Reference; remoteMain?: Reference }
 export interface CommitChoice { oid: string; subject: string; date: string }
+export interface RepositoryOptions { excludedPaths?: readonly string[]; gitExecutable?: string }
 const allowed = new Set(['rev-parse', 'for-each-ref', 'merge-base', 'log', 'ls-tree', 'ls-files', 'cat-file']);
 const nul = (bytes: Buffer): string[] => decode(bytes).split('\0').filter(Boolean);
 
@@ -18,25 +19,33 @@ export class GitRepository {
   private objectBytes = 0;
   private readonly unchanged = new Map<string, string>();
   private readonly commitCache = new Map<string, CommitChoice>();
-  private constructor(readonly root: string) {}
-  static async open(folder: string): Promise<GitRepository> {
-    const probe = new GitRepository(folder);
-    const root = decode(await probe.read(['rev-parse', '--show-toplevel'])).replace(/\r?\n$/, '');
-    return new GitRepository(await fs.realpath(root));
+  private constructor(readonly root: string, private readonly options: RepositoryOptions = {}) {}
+  excludes(file: string): boolean {
+    return isNotes(file) || !!this.options.excludedPaths?.some(folder => file === folder || file.startsWith(folder + '/'));
   }
-  private read(args: string[]): Promise<Buffer> {
+  static async open(folder: string, options: RepositoryOptions = {}): Promise<GitRepository> {
+    const probe = new GitRepository(folder, options);
+    const root = decode(await probe.read(['rev-parse', '--show-toplevel'])).replace(/\r?\n$/, '');
+    return new GitRepository(await fs.realpath(root), options);
+  }
+  private read(args: string[], input?: string): Promise<Buffer> {
     if (!allowed.has(args[0])) throw new Error('不允许的 Git 操作');
-    return new Promise((resolve, reject) => execFile('git', [
-      '--no-optional-locks', '-c', 'core.fsmonitor=false',
-      '-c', 'core.filemode=true', '-c', 'core.quotePath=false', ...args
-    ], {
-      cwd: this.root, encoding: 'buffer', timeout: 30000, maxBuffer: 32 * 1024 * 1024,
-      // Git 2.39.5 supports the environment guard, but not the newer CLI flag.
-      env: { ...process.env, GIT_OPTIONAL_LOCKS: '0', GIT_NO_LAZY_FETCH: '1', GIT_ALLOW_PROTOCOL: '', GIT_NO_REPLACE_OBJECTS: '1', GIT_TERMINAL_PROMPT: '0' }
-    }, (error, out, err) => {
-      if (error) reject(new Error('Git 读取失败：' + (err.toString('utf8').trim().slice(0, 600) || error.message)));
-      else resolve(out);
-    }));
+    return new Promise((resolve, reject) => {
+      const child = execFile(this.options.gitExecutable || 'git', [
+        '--no-optional-locks', '-c', 'core.fsmonitor=false',
+        '-c', 'core.filemode=true', '-c', 'core.quotePath=false', ...args
+      ], {
+        cwd: this.root, encoding: 'buffer', timeout: 30000, maxBuffer: 32 * 1024 * 1024,
+        // Git 2.39.5 supports the environment guard, but not the newer CLI flag.
+        env: { ...process.env, GIT_OPTIONAL_LOCKS: '0', GIT_NO_LAZY_FETCH: '1', GIT_ALLOW_PROTOCOL: '', GIT_NO_REPLACE_OBJECTS: '1', GIT_TERMINAL_PROMPT: '0' }
+      }, (error, out, err) => {
+        if (error) reject(new Error('Git 读取失败：' + (err.toString('utf8').trim().slice(0, 600) || error.message)));
+        else resolve(out);
+      });
+      // Batch protocols receive only validated object IDs, never repository paths or shell input.
+      child.stdin?.on('error', () => { /* execFile reports the child failure. */ });
+      child.stdin?.end(input);
+    });
   }
   async resolve(reference: string): Promise<string> {
     if (!reference.trim() || reference.length > 1024 || reference.includes('\0')) throw new Error('请输入有效提交');
@@ -119,13 +128,60 @@ export class GitRepository {
       if (!Number.isSafeInteger(size) || size < 0 || size > FILE_LIMIT) throw new Error('文件超过 5 MiB，无法保存快照');
       data = await this.read(['cat-file', 'blob', entry.oid]);
       if (data.length !== size) throw new Error('Git 对象长度不一致');
-      this.objectCache.set(entry.oid, data); this.objectBytes += data.length;
-      while (this.objectBytes > 20 * 1024 * 1024 || this.objectCache.size > 1000) {
-        const first = this.objectCache.keys().next().value!;
-        this.objectBytes -= this.objectCache.get(first)!.length; this.objectCache.delete(first);
-      }
+      this.cacheObject(entry.oid, data);
     }
     return { mode: entry.mode as Snapshot['mode'], data };
+  }
+  private cacheObject(oid: string, data: Buffer): void {
+    if (this.objectCache.has(oid)) return;
+    this.objectCache.set(oid, data); this.objectBytes += data.length;
+    while (this.objectBytes > 20 * 1024 * 1024 || this.objectCache.size > 1000) {
+      const first = this.objectCache.keys().next().value!;
+      this.objectBytes -= this.objectCache.get(first)!.length; this.objectCache.delete(first);
+    }
+  }
+  /** Read immutable blobs in bounded batches instead of two Git processes per changed file. */
+  private async objects(entries: TreeEntry[]): Promise<Map<string, Buffer | Error>> {
+    const result = new Map<string, Buffer | Error>(), missingIds: string[] = [];
+    for (const { oid } of entries) {
+      if (!isCommit(oid)) throw new Error('Git 对象 ID 格式错误');
+      if (result.has(oid)) continue;
+      const cached = this.objectCache.get(oid);
+      result.set(oid, cached || new Error('Git 对象不可用'));
+      if (!cached) missingIds.push(oid);
+    }
+    if (!missingIds.length) return result;
+    const metadata = decode(await this.read(['cat-file', '--batch-check'], missingIds.join('\n') + '\n')).trimEnd().split('\n');
+    if (metadata.length !== missingIds.length) throw new Error('Git 对象列表长度不一致');
+    const pending: { oid: string; size: number }[] = [];
+    let total = 0;
+    for (let i = 0; i < metadata.length; i++) {
+      const [oid, type, count] = metadata[i].split(' '), size = Number(count);
+      if (oid !== missingIds[i]) throw new Error('Git 对象列表顺序不一致');
+      if (type !== 'blob' || !Number.isSafeInteger(size) || size < 0) continue;
+      if (size > FILE_LIMIT) { result.set(oid, new Error('文件超过 5 MiB，无法保存快照')); continue; }
+      total += size;
+      if (total > SCAN_LIMIT) throw new Error('本次差异超过 80 MiB，请选择更近的基点');
+      pending.push({ oid, size });
+    }
+    for (let start = 0; start < pending.length;) {
+      let end = start, bytes = 0;
+      while (end < pending.length && bytes + pending[end].size <= 16 * 1024 * 1024 && end - start < 512) bytes += pending[end++].size;
+      const batch = pending.slice(start, end);
+      const output = await this.read(['cat-file', '--batch'], batch.map(item => item.oid).join('\n') + '\n');
+      let offset = 0;
+      for (const item of batch) {
+        const newline = output.indexOf(10, offset);
+        if (newline < 0 || output.subarray(offset, newline).toString('ascii') !== `${item.oid} blob ${item.size}` ||
+          output[newline + 1 + item.size] !== 10) throw new Error('Git 对象长度不一致');
+        const data = Buffer.from(output.subarray(newline + 1, newline + 1 + item.size));
+        result.set(item.oid, data); this.cacheObject(item.oid, data);
+        offset = newline + 2 + item.size;
+      }
+      if (offset !== output.length) throw new Error('Git 对象批次长度不一致');
+      start = end;
+    }
+    return result;
   }
   /** null means an unchanged baseline file; links are represented by link text only. */
   private async working(name: string, baseline?: TreeEntry): Promise<Snapshot | null> {
@@ -195,17 +251,43 @@ export class GitRepository {
     }
     const tree = await this.tree(base);
     const paths = new Set([...tree.keys(), ...index.keys(), ...nul(await this.read(['ls-files', '--others', '--exclude-standard', '-z'])), ...extraPaths]);
+    const names = [...paths].filter(name => !this.excludes(name)).sort();
+    for (const name of this.unchanged.keys()) if (!paths.has(name) || this.excludes(name)) this.unchanged.delete(name);
+    const candidates = new Map<string, Snapshot | Error>();
+    let cursor = 0, workingBytes = 0;
+    // Preserve every parent/symlink and file-identity check. Only independent file reads overlap.
+    // Await all workers even on failure so no reads outlive the scan or race the next operation.
+    const workers = await Promise.allSettled(Array.from({ length: Math.min(8, names.length) }, async () => {
+      while (cursor < names.length && workingBytes <= SCAN_LIMIT) {
+        const name = names[cursor++]; checkPath(name);
+        try {
+          const entry = tree.get(name);
+          if ((entry && !['100644', '100755', '120000'].includes(entry.mode)) || index.get(name) === '160000') throw new Error('子模块请单独打开为仓库后审阅');
+          const right = await this.working(name, entry);
+          if (right) { workingBytes += right.data.length; candidates.set(name, right); }
+        } catch (error) { candidates.set(name, error instanceof Error ? error : new Error(messageOf(error))); }
+      }
+    }));
+    for (const worker of workers) if (worker.status === 'rejected') throw worker.reason;
+    if (workingBytes > SCAN_LIMIT) throw new Error('本次差异超过 80 MiB，请选择更近的基点');
+    const entries = [...candidates].filter(([, value]) => !(value instanceof Error)).map(([name]) => tree.get(name)).filter((entry): entry is TreeEntry => !!entry);
+    let objects: Map<string, Buffer | Error>;
+    try { objects = await this.objects(entries); }
+    catch (error) {
+      if (messageOf(error).includes('80 MiB')) throw error;
+      objects = new Map(entries.map(entry => [entry.oid, error instanceof Error ? error : new Error(messageOf(error))]));
+    }
     const result: ReviewFile[] = [];
     let size = 0;
-    for (const name of [...paths].sort()) {
-      if (isNotes(name)) continue;
-      checkPath(name);
+    for (const name of names) {
+      const right = candidates.get(name);
+      if (!right) continue;
       try {
-        const entry = tree.get(name);
-        if (entry?.mode === '160000' || index.get(name) === '160000') throw new Error('子模块请单独打开为仓库后审阅');
-        const right = await this.working(name, entry);
-        if (!right) continue;
-        const left = await this.object(entry);
+        if (right instanceof Error) throw right;
+        const entry = tree.get(name), data = entry ? objects.get(entry.oid) : undefined;
+        if (data instanceof Error) throw data;
+        if (entry && !data) throw new Error('Git 对象不可用');
+        const left: Snapshot = entry ? { mode: entry.mode as Snapshot['mode'], data: data! } : absent();
         if (snapshotId(left) === snapshotId(right)) continue;
         size += left.data.length + right.data.length;
         if (size > SCAN_LIMIT) throw new Error('本次差异超过 80 MiB，请选择更近的基点');

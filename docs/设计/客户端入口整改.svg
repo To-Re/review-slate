@@ -1,0 +1,56 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="1030" viewBox="0 0 1440 1030">
+<title>ReviewSlate 客户端入口整改设计稿</title><desc>合成数据设计示意。顶部明确当前项目与切换，仓库对话框优先最近项目，语言和默认基点进入独立设置。</desc>
+<defs><style>text{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;fill:#22375a;font-size:14px}.muted{fill:#536789;font-size:12px}.caption{font-size:19px;font-weight:650}.title{font-size:15px;font-weight:650}.purple{fill:#5940ae}.blue{fill:#284ba9}.small{font-size:11px}.mono{font-family:Menlo,Consolas,monospace;font-size:12px}.white{fill:white}.line{stroke:#d6def0;stroke-width:1}.green{fill:#206446}.amber{fill:#805200}.red{fill:#bd3446}</style></defs>
+<rect width="1440" height="1030" fill="#f3f6ff"/>
+<text x="32" y="34" class="caption">ReviewSlate · 入口与工作区整改</text><text x="32" y="58" class="muted">合成数据设计稿 · 以当前功能实现 · 非运行截图 / 非 Codex 原生界面</text>
+<!-- Workspace -->
+<rect x="24" y="78" width="1392" height="373" rx="10" fill="#fcfdff" stroke="#d6def0"/>
+<g transform="translate(42 94) scale(.5)"><rect x="4" y="4" width="56" height="56" rx="14" fill="#5940ae"/><path d="M35 15H19V49H43V23L35 15Z M35 15V23H43M25 28H35M25 34H30" fill="none" stroke="white" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/><path d="M30 41L36 47L50 32" fill="none" stroke="#9bf1cd" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/></g><text x="86" y="116" style="font-size:18px;font-weight:650">ReviewSlate</text>
+<line x1="228" x2="228" y1="92" y2="132" class="line"/>
+<rect x="245" y="88" width="250" height="48" rx="7" fill="#eee8fc" stroke="#c9bae8"/><text x="259" y="104" class="muted small">当前项目</text><text x="259" y="124" class="title">orchard</text><text x="429" y="117" class="purple">切换 ⌄</text>
+<rect x="906" y="96" width="100" height="32" rx="6" fill="#fcfdff" stroke="#d6def0"/><text x="926" y="117" class="blue">审阅记录</text>
+<rect x="1016" y="96" width="110" height="32" rx="6" fill="#fcfdff" stroke="#d6def0"/><text x="1029" y="117" class="blue">＋ 新建审阅</text>
+<rect x="1138" y="96" width="120" height="32" rx="6" fill="#eee8fc"/><text x="1155" y="117" class="purple">交给 Agent</text>
+<rect x="1276" y="96" width="114" height="32" rx="6" fill="#fcfdff" stroke="#d6def0"/><text x="1300" y="117" class="blue">⚙ 设置</text>
+<line x1="24" x2="1416" y1="144" y2="144" class="line"/>
+<text x="44" y="171" class="mono">⑂ feature/review</text><text x="210" y="171" class="muted">CR 024</text><rect x="285" y="153" width="72" height="25" rx="5" fill="#eee8fc"/><text x="296" y="170" class="purple small">固定基点</text><text x="367" y="171" class="mono">main · b7e4d9a1</text><text x="522" y="171" class="blue">▢</text>
+<text x="1138" y="171" class="muted">已审 1 / 4</text><rect x="1224" y="164" width="70" height="5" rx="3" fill="#d6def0"/><rect x="1224" y="164" width="18" height="5" rx="3" fill="#5940ae"/><text x="1310" y="171" class="green small">✓ 已保留</text>
+<line x1="24" x2="1416" y1="186" y2="186" class="line"/>
+<rect x="1090" y="187" width="325" height="263" fill="#f3f6ff"/>
+<line x1="264" x2="264" y1="186" y2="451" class="line"/><line x1="1090" x2="1090" y1="186" y2="451" class="line"/>
+<text x="42" y="213" class="title">变更文件</text><text x="121" y="213" class="muted">4</text><text x="233" y="213" class="blue">↻</text>
+<rect x="38" y="227" width="212" height="30" rx="5" fill="white" stroke="#d6def0"/><text x="49" y="247" class="muted">筛选文件…</text>
+<rect x="39" y="270" width="210" height="32" rx="5" fill="#eee8fc"/>
+<text x="46" y="291">⌄</text><rect x="64" y="279" width="13" height="13" rx="3" fill="#9b5500"/><text x="66" y="290" class="white small">−</text><path d="M86 281h7l3 3h11v10H86z" fill="none" stroke="#986817" stroke-width="1.5"/><text x="115" y="291">src</text><text x="189" y="291" class="amber small">1/2</text><path d="M220 281h12v8h-7l-3 3v-3h-2z" fill="none" stroke="#7540b6"/><text x="236" y="291" class="purple small">2</text>
+<rect x="80" y="313" width="13" height="13" rx="3" fill="#5940ae"/><text x="81" y="324" class="white small">✓</text><text x="101" y="324" class="purple small">T</text><text x="119" y="324">value.test.ts</text><text x="232" y="324" class="blue small">M</text>
+<rect x="80" y="347" width="13" height="13" rx="3" fill="white" stroke="#8b9abb"/><text x="100" y="358" class="blue small">TS</text><text x="124" y="358">value.ts</text><text x="232" y="358" class="blue small">M</text>
+<rect x="64" y="381" width="13" height="13" rx="3" fill="white" stroke="#8b9abb"/><text x="85" y="392" class="blue small">M↓</text><text x="111" y="392">README.md</text><text x="232" y="392" class="green small">A</text>
+<text x="43" y="434" class="muted small">目录含全部子项 · 已审单独确认</text>
+<text x="282" y="213" class="title">src/deep/value.ts</text><rect x="906" y="197" width="65" height="24" rx="4" fill="#e6edff"/><text x="917" y="213" class="blue small">只读对比</text><rect x="982" y="195" width="92" height="30" rx="5" fill="#5940ae"/><text x="995" y="215" class="white">标记已审</text>
+<rect x="280" y="237" width="80" height="27" rx="4" fill="#eee8fc"/><text x="289" y="255" class="purple small">完整 Diff</text><text x="377" y="255" class="muted">上次审阅后的变化</text><line x1="264" x2="1090" y1="275" y2="275" class="line"/>
+<text x="282" y="297" class="muted">固定基点 b7e4d9a1</text><text x="699" y="297" class="muted">已保存的工作区</text><line x1="676" x2="676" y1="275" y2="451" class="line"/>
+<rect x="266" y="312" width="409" height="29" fill="#fff0f2"/><rect x="677" y="312" width="412" height="29" fill="#e9f7ee"/><text x="283" y="332" class="mono">1   export const value = 1;</text><text x="696" y="332" class="mono">1   export const value = 2;</text>
+<text x="283" y="365" class="mono">2</text><text x="696" y="365" class="mono">2</text><text x="284" y="429" class="muted small">选择代码可写意见 · 切文件复用此工作区</text>
+<rect x="1103" y="196" width="95" height="30" rx="5" fill="#eee8fc"/><text x="1118" y="216" class="purple">当前文件</text><text x="1220" y="216" class="muted">待处理 2</text>
+<rect x="1104" y="242" width="297" height="158" rx="8" fill="#fcfdff" stroke="#d6def0"/><rect x="1104" y="242" width="4" height="158" rx="2" fill="#805200"/>
+<rect x="1119" y="255" width="57" height="22" rx="4" fill="#fff0d0"/><text x="1127" y="270" class="amber small">待处理</text><text x="1186" y="271" class="muted small">工作区 1 行</text>
+<text x="1119" y="305">确认默认值变化是否覆盖已有调用。</text><rect x="1120" y="317" width="265" height="38" rx="3" fill="#f3f6ff"/><text x="1128" y="341" class="mono">export const value = 2;</text><text x="1120" y="379" class="blue small">打开位置　 编辑　 解决</text><text x="1348" y="379" class="red small">删除</text>
+<text x="1107" y="431" class="muted small">意见区使用浅紫蓝底与彩色状态卡片</text>
+<!-- Repository dialog -->
+<text x="34" y="491" class="caption">项目选择：最近项目与系统选目录优先</text>
+<rect x="34" y="510" width="654" height="473" rx="12" fill="#fcfdff" stroke="#d6def0"/>
+<text x="59" y="548" class="caption">切换项目</text><text x="649" y="548" class="muted">×</text><line x1="34" x2="688" y1="566" y2="566" class="line"/>
+<text x="59" y="597" class="title">最近项目</text>
+<rect x="58" y="612" width="605" height="74" rx="8" fill="#eee8fc" stroke="#c9bae8"/><path d="M74 632h11l5 5h17v22H74z" fill="none" stroke="#986817" stroke-width="2"/><text x="122" y="639" class="title">orchard</text><text x="122" y="662" class="muted mono">projects/orchard</text><rect x="589" y="635" width="52" height="24" rx="4" fill="#dcd1f4"/><text x="600" y="652" class="purple small">当前</text>
+<rect x="58" y="698" width="605" height="74" rx="8" fill="white" stroke="#d6def0"/><path d="M74 718h11l5 5h17v22H74z" fill="none" stroke="#986817" stroke-width="2"/><text x="122" y="725" class="title">harbor</text><text x="122" y="748" class="muted mono">projects/harbor</text><text x="603" y="741" class="blue">打开 →</text>
+<rect x="58" y="786" width="605" height="35" rx="6" fill="#5940ae"/><text x="294" y="809" class="white">选择文件夹…</text><text x="61" y="841" class="blue">⌄ 手动输入路径（备用方式，点击展开）</text>
+<rect x="58" y="856" width="605" height="104" rx="7" fill="#f3f6ff" stroke="#d6def0" stroke-dasharray="4 3"/><text x="74" y="880" class="muted">项目文件夹</text><rect x="74" y="893" width="436" height="40" rx="5" fill="white" stroke="#d6def0"/><text x="88" y="918" class="muted">输入本地 Git 项目文件夹</text><rect x="524" y="893" width="123" height="40" rx="5" fill="#5940ae"/><text x="551" y="918" class="white">打开项目</text>
+<!-- Settings dialog -->
+<text x="750" y="491" class="caption">设置：只放界面与当前仓库的低频选项</text>
+<rect x="750" y="510" width="654" height="473" rx="12" fill="#fcfdff" stroke="#d6def0"/>
+<text x="775" y="548" class="caption">设置</text><text x="1366" y="548" class="muted">×</text><line x1="750" x2="1404" y1="566" y2="566" class="line"/>
+<text x="775" y="603" class="title">界面</text><text x="775" y="638">界面语言</text><rect x="775" y="650" width="604" height="42" rx="6" fill="white" stroke="#d6def0"/><text x="790" y="677">跟随宿主</text><text x="1350" y="677" class="muted">⌄</text><text x="775" y="719" class="muted">当前显示：简体中文。适用于所有仓库。</text><text x="775" y="741" class="muted">更改语言不会提交草稿或修改审阅数据。</text>
+<line x1="775" x2="1379" y1="768" y2="768" class="line"/>
+<text x="775" y="801" class="title">当前仓库 · orchard</text><text x="775" y="833">新建审阅的默认基点</text><rect x="775" y="848" width="604" height="65" rx="7" fill="#f3f6ff" stroke="#d6def0"/><text x="791" y="875" class="title">main</text><text x="791" y="895" class="muted">使用与当前分支的共同祖先</text><rect x="1284" y="864" width="77" height="32" rx="5" fill="white" stroke="#d6def0"/><text x="1300" y="885" class="blue">更改…</text><text x="775" y="940" class="muted">只影响之后新建的审阅，不改变当前 CR 的固定基点。</text>
+<text x="34" y="1012" class="muted">设计稿使用相对路径与虚构代码；尺寸、异常与恢复规则以《客户端体验整改》正文为准。</text>
+</svg>

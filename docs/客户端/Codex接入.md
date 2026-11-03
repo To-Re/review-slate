@@ -1,20 +1,20 @@
 # Codex 接入
 
-维护责任：客户端与 Codex 接入研发；最后核查：2026-11-03。适用范围：宿主契约、接入实现、开发方法与进入正式客户端的条件。状态：接入能力验证中；完整 Git 审阅客户端未实现、未验收。来源：本文链接的公开一手资料、`689de24` 的核心代码、本地忽略的探针 0.0.2，以及集成负责人交接的目标宿主工具调用结果。
+维护责任：客户端研发；最后核查：2026-11-03。适用范围：宿主契约、接入实现、运行时与交付门槛。状态：0.1.2 已通过官方 CLI 更新本地安装并启用，缓存资产与最终审核包一致。真实 Codex 完整面板、深色与窄窗未覆盖，候选未公开发布。来源：`3dd7e30` 加本轮源码、包清单、正式工具发现，以及集成负责人交接的安装与验证结果。
 
-本地探针已安装且工具可调用，独立测试应用已验证合成数据读写；目标 Codex 中的 iframe 显示、点击与关闭重开尚未确认。正式产品仍为 VS Code 系扩展 1.0.1。本文维护接入决定和开发入口，[测试](../测试/README.md)维护版本、方法、产物指纹与结果；集成负责人交接的实机结果不记作本文作者独立验收。
+正式入口 `mcp__reviewslate__reviewslate_open` 已在当前工具列表中发现；旧探针已卸载。当前实现使用真实 Git 和独立持久化数据，独立测试应用运行包内 UI 与 stdio；工具发现及独立应用结果均不等于真实 Codex 完整面板验收。公开产品仍为 VSIX 1.0.1。本页维护宿主和包门槛，[客户端方案](Codex客户端方案.md)维护实现，[测试](../测试/README.md)维护证据；其他角色的实机结果按交接注明，不记作本文作者独立操作。
 
 ## 目标与当前范围
 
 Codex 目标是在同一应用中持续完成 Git 人工审阅，并接续 CR、已审内容、评论和导航。各应用独立保存数据，跨应用同步或迁移不在首版范围。完整用户流程及验收规则由[产品](../产品/README.md)维护，工作区布局及交互由[设计](../设计/README.md)维护，不在此另定一套产品规则。
 
-当前探针只提供一个合成已审 checkbox、一段评论和持久化 revision。它不包含仓库选择、文件树、Diff、CR、真实项目评论或 Agent 处理入口；checkbox 保存成功不能解释为文件已审能力已实现。
+当前实现已包含系统文件夹选择／手动输入／最近记录、真实树／完整只读 Diff、CR 生命周期、已审、三类意见、固定 Agent 批次、导航／草稿恢复、中英偏好及断连操作核对。源码保存未启用；H1／H2／H3 与 E1 的状态分别记录。
 
 ## 公开契约与目标宿主证据
 
 | 契约 | 已核实内容 | 本项目使用边界 |
 | --- | --- | --- |
-| 打包与本地安装 | 官方支持 Skills 与可选 MCP 配置，推荐根 `plugin.json`，兼容 `.codex-plugin/plugin.json`，提供 marketplace 安装 | 当前探针使用兼容格式；正式 VSIX 不直接变成 Codex 插件 |
+| 打包与本地安装 | 官方支持 Skills 与可选 MCP 配置，推荐根 `plugin.json`，兼容 `.codex-plugin/plugin.json`，提供 marketplace 安装 | 正式 Codex 包使用根 `plugin.json`／`mcp.json`；VSIX 保持独立产物 |
 | UI 资源与入口 | `_meta.ui.resourceUri` 关联 MCP App；`_meta["openai/ui"].entrypoints` 的 `global` 与 `thread` 对应侧栏与会话面板入口 | 官方扩展页面以 ChatGPT 为说明对象；目标 Codex 的实际入口仍须验证，不等于替换原生侧栏 |
 | 页面桥接 | MCP Apps 使用父窗口 `postMessage` JSON-RPC，支持初始化、`tools/call` 与工具结果通知 | 已有公开可实现协议，无需猜测内置插件 API；不自动证明每个宿主支持全部能力 |
 | 本地执行 | 官方桌面插件支持 stdio 子进程 | 当前选择本地 stdio；不引入 HTTP 监听、常驻服务或远端部署 |
@@ -22,76 +22,91 @@ Codex 目标是在同一应用中持续完成 Git 人工审阅，并接续 CR、
 
 依据：[官方打包说明](https://developers.openai.com/plugins/build/plugins)、[Plugin Extensions](https://developers.openai.com/plugins/build/extensions)、[MCP Apps UI 示例](https://developers.openai.com/plugins/build/app-quickstart)及[桌面插件提交说明](https://developers.openai.com/plugins/deploy/desktop-only)。
 
-探针 0.0.2 已经官方 CLI 从本地 marketplace 安装，集成负责人在目标开发会话发现工具并调用 `reviewslate_probe_open`，得到 revision 0 的合成状态。这证明了该安装环境下的工具发现与本地读取，没有证明 iframe 已被挂载。包版本是 0.0.2，当前页面和 server 的内部版本仍为 0.0.1；具体环境与验证记录见[测试](../测试/README.md)。
+当前工具发现只证明正式入口已注册；app-only 权限、组件专用 `_meta` 隔离和关闭重开仍需目标宿主证据。真实宿主的完整链路按文末 H1／H2／H3 分别验证，不把待验项写成平台不支持。
 
-尚待确认的第一层组合是：普通插件入口挂载该页面，页面动作往返本地工具，关闭重开后读取相同数据。第二层是获准仓库访问、Git 视图、CR、评论与导航的完整实现。公开标准、工具调用和独立宿主结果都不能跨层代替证据；当前也不能据此断言目标宿主一定不支持该组合。
+## 消息与独立测试应用
 
-## 本地实现与消息边界
+正式页面经父窗口 `postMessage` 发起 `ui/initialize`、`tools/call`，只接收父窗口有效回执。模型可见入口为 `reviewslate_open`；其余业务工具为 app-only，代码、路径、意见及凭据放在组件专用 `_meta.reviewslate`。协议、结果分类与持久化归属直接见[客户端方案](Codex客户端方案.md#三内部工具契约)，不沿用旧探针的三工具或合成 revision 协议。
 
-本地产物位于 `artifacts/codex-probe/`，被 Git 忽略。它们不属于 `689de24`，不进入 VSIX，普通克隆不会带有这些源码和应用；当前没有可由正式仓库版本独立复现的 Codex 产品包。
+[自有 AppKit／WKWebView 测试应用](../../scripts/codex-test-host/)加载实际候选包的 UI，并经 stdio 调用同包服务和运行时。它不含 Codex 代码、资产、账户或配置，没有复制、改名或重签 Codex，也没有 HTTP 监听。测试使用隔离应用数据和合成 Git 仓库，结果不能代替真实宿主的权限、入口、生命周期或兼容性。
 
-| 本地产物 | 职责 |
-| --- | --- |
-| `plugins/reviewslate-probe/ui.html` | 原生 HTML/CSS/JS 合成数据页面，显示草稿、连接状态、已保存摘要及 revision |
-| `plugins/reviewslate-probe/server.cjs` | stdio MCP 工具；固定目录内读写合成状态，检查预期 revision 与读取失败 |
-| `plugins/reviewslate-probe/ui.test.cjs` | 模拟 DOM 与父窗口消息的客户端回归 |
-| `plugins/reviewslate-probe/.codex-plugin/plugin.json`、`.mcp.json` | 当前本地兼容包及固定启动配置 |
-| `test-host/main.swift`、`shell.html`、`Info.plist`、`build-host.sh` | 自有 AppKit + WKWebView 应用，复用原 UI/server，标注“独立测试宿主 · 非 Codex” |
+验证分三层：自动测试检查真实 Git／持久化与模拟页面状态；最终包检查可搬移启动、资源及运行时，独立应用检查真实渲染和操作；真实 Codex 检查合法入口、iframe、工具往返和关闭重开。源文件变化后须重新打包并核对缓存，不能假定已运行会话自动采用新版本。旧探针只保留历史证据，不再作为当前开发、安装或调用入口。
 
-页面以 `2026-01-26` 协议发起 `ui/initialize`，成功后通知 `ui/notifications/initialized`；只接受父窗口消息。调用工具使用 `tools/call`，模型发起的工具结果通过 `ui/notifications/tool-result` 接收。工具限定为 `reviewslate_probe_open`、`reviewslate_probe_read` 和 `reviewslate_probe_save`，写操作携带 `expectedRevision`；字段实现以本地 `server.cjs` 为准，不是正式 Git 审阅 API。
+## 正式包与运行时方案
 
-有效工具回执才更新已保存摘要。保存期间重复点击被阻止，断线、超时、冲突和无效回执保留当前面板草稿；冲突后先重新读取。迟到响应不能伪装本次成功，重新读取不覆盖未保存输入。草稿只在当前面板存活，关闭后的草稿恢复尚未实现。
+源码与构建入口见[客户端方案](Codex客户端方案.md#一源码与组件边界)。以下布局已由构建器实现，当前候选版本 0.1.2，首个目标为 macOS arm64 本地仓库；其他架构、系统、远程工作区不从 VSIX 继承支持。原生选择组件编译目标为 macOS 13+；整体最低系统版本仍须结合捆绑 Node 和最终候选实测，不能只由此参数推断。
 
-```mermaid
-flowchart LR
-    UI[同一份探针 UI] -->|父窗口 JSON-RPC| Host[目标宿主桥接或独立测试壳]
-    Host -->|stdio| Server[同一份合成数据工具]
-    Server --> Data[该宿主独立测试目录]
-    Data --> Server
-    Server -->|保留请求对应关系| Host
-    Host -->|有效回执| UI
+```text
+reviewslate-codex/
+  plugin.json
+  mcp.json
+  bin/launch.sh
+  runtime/darwin-arm64/node
+  server/index.cjs
+  ui/workspace.html
+  native/ReviewSlate Folder Picker.app/
+    Contents/Info.plist
+    Contents/MacOS/ReviewSlateFolderPicker
+    Contents/_CodeSignature/CodeResources
+  LICENSE
+  licenses/                  # 对应确切 Node 与 UI／协议依赖版本
+  build-manifest.json        # 版本、平台、依赖、文件哈希和包体测量
 ```
 
-独立测试壳用 WKWebView 本地 URL scheme 提供 iframe，原生端只转发三个工具，Node 路径、server 路径与 `test-host/data` 由宿主固定构造，不接受页面传任意命令或文件路径。Node 完成 MCP 初始化后才加载 UI，随应用退出回收；没有 HTTP 监听。插件探针使用另一份 `artifacts/codex-probe/data`，两份合成状态不能互作恢复证据。
+实际源包采用根 `plugin.json`、`mcp.json` 和 Agent Plugins schema，不用 Skill 代替 UI，也不靠 lifecycle hook 修改用户配置。stdio 配置如下；标准包已通过 CLI 解析及本地安装核对，真实面板另验：
 
-独立应用不含 Codex 代码、资产、账户或配置，也没有复制、改名或重签 Codex。它仅证明自有页面与 stdio 链路，不能证明真实宿主的权限、入口、生命周期或兼容性。
-
-## 开发与安装验证
-
-在保留本地产物的开发机上可运行：
-
-```sh
-node --test artifacts/codex-probe/plugins/reviewslate-probe/ui.test.cjs
-bash artifacts/codex-probe/test-host/build-host.sh
+```json
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json",
+  "mcpServers": {
+    "reviewslate": {
+      "type": "stdio",
+      "command": "./bin/launch.sh",
+      "cwd": "${PLUGIN_ROOT}"
+    }
+  }
+}
 ```
 
-构建使用系统 Swift，当前目标为 macOS arm64、macOS 13+，输出 `test-host/ReviewSlate Test Host.app` 并对自有 bundle 做本地 ad-hoc 签名，不自动启动应用。运行依赖开发机固定位置的 Node，尚未把运行时打进可分发包；不能把本机编译成功宣传为免依赖安装。
+官方示例说明 `${PLUGIN_ROOT}` 用于配置内的包位置。[官方本地启动说明](https://developers.openai.com/plugins/deploy/desktop-only#configure-a-local-mcp-server) 本轮集成实测进一步确认：目标 CLI 的 Agent Plugins 解析拒绝绝对 `/bin/sh` command，采用包内相对 `./bin/launch.sh` 才能正确注册服务器；脚本通过自身位置解析 Node 和 server，不依赖开发机 Node 路径。保持根标准配置，没有回退到旧兼容目录。
 
-验证分三层推进，详细场景与结果由[测试](../测试/README.md)维护：
+launcher 检查 Darwin、包内文件和系统 Git，再 exec 包内 Node，不驻留二级进程、不做运行时下载、npm install、自动更新或登录。不能以 uname -m 判断 Apple Silicon 可用性：调用方经 Rosetta 运行时可返回 x86_64；实际架构由捆绑 Mach-O 执行约束。集成负责人固定 Node 22.23.4 arm64 并核对官方校验，来源见 scripts/codex-runtime.json，构建写 build manifest。开发机测试与捆绑运行时／最终包检查分开记录。
 
-1. **页面与 stdio。** 用模拟消息和独立测试应用检查真实保存、revision 冲突、失败草稿、键盘操作及子进程回收，始终复用原 UI/server，缺少的宿主能力明确不提供。
-2. **已安装产物。** 在隔离测试配置中安装本地 marketplace，核对缓存版本、资源和解析后的 command、cwd、环境与运行时；用最小 PATH、搬移及关闭场景验证实际启动配置。当前可搬移产物测试尚未完成。源变更后重新打包／安装，再用新会话验证，不能假定已运行的桌面会话重载了工具。
-3. **目标桌面宿主。** 打开真实入口，检查 iframe、输入、工具调用、保存与关闭重开。自动化不可用时保留未执行项，通过获准的实际操作补证；不能拿独立应用截图或工具日志替代。
+0.1.2 最终候选已通过 Codex 全套 102 项、VSIX 全套 112 项、UI 类型检查、两种包构建、搬移检查及[独立代码审核](../代码评审/README.md)、[本地安装前安全审核](../安全/README.md)。集成负责人通过官方 CLI `plugin add` 更新本地安装，`plugin list` 确认版本 0.1.2、installed／enabled 均为 true；缓存 35 个文件（34 项资产及 manifest）与最终清单逐项一致。
 
-当前兼容 `.mcp.json` 使用本机绝对路径，只解决了这台开发机的启动。路径解析不能跨格式推断：官方根 `mcp.json` 的 stdio 示例支持 `${PLUGIN_ROOT}`，Callstack 则明确其兼容格式不展开该变量。正式适配器必须测试安装后解析出的实际命令和工作目录，并提供可复现的运行时；不把个人绝对路径写入可发布配置。[官方本地配置](https://developers.openai.com/plugins/deploy/desktop-only#configure-a-local-mcp-server)与[Callstack 开发说明](https://github.com/callstackincubator/codex-mobile-dev-plugin/blob/main/CONTRIBUTING.md#build-and-package)分别说明了这些环境。
+最终安装包的 manifest SHA-256 为 `c1474f2999446e3aade0c77c5cbe7f0e34c4f856e41fe1e152289a87ee3880b6`，ZIP SHA-256 为 `4f26ab790c4c781d1c65288431c7484f1cde6057e5a1651ea770bbd5ebdc9f3f`。这些指纹绑定本轮本地安装，不代表公开发布。
 
-开发方法参考 MCP Apps 的[测试指南](https://apps.extensions.modelcontextprotocol.io/api/documents/testing-mcp-apps.html)：参考宿主用于本地迭代，兼容宿主用于真实环境检查。其 HTTP 服务和隧道示例不符合本项目约束，本项目使用 stdio。Callstack 的[共享 UI/server、独立 Mac 应用与安装测试](https://github.com/callstackincubator/codex-mobile-dev-plugin/blob/main/CONTRIBUTING.md)提供同类工程参照；21st 的[本地测试说明](https://github.com/21st-dev/codex-plugin/blob/main/README.md#local-testing)强调缓存安装、源变更重装和新会话验证，并说明离线检查不证明 iframe。这些是方法依据，不是 ReviewSlate 的验收记录。
+自有 AppKit／WKWebView 应用中，集成负责人验证了切文件再返回后的已审、评论和草稿保持；设计在最终包复验 Space 勾选回执后回焦、再次 Space 撤回，以及主动 Tab 移走后不抢回焦点。独立 32 × 32 px 箭头／checkbox 热区此前已通过边缘点击检查，最终 CSS 未变；验收后已恢复原 1/4、两条评论和合成草稿。真实 Codex 完整 GUI、深色与窄窗未覆盖，不能由独立应用通过推导完成。
 
-## 进入正式客户端的条件
+运行中的旧面板不保证自动重载包。用户应等页面确认本地保存后，完全退出并重开 Codex；本轮安装未代替用户重启宿主，不删除或重置审阅数据。
 
-接入门槛仍是先在目标宿主打开合成页面、点击保存并核对落盘，再关闭重开读取同一记录，同时确认没有 HTTP 监听或残留工具进程。已取得的安装和工具调用证据继续有效，尚缺的 UI 交互证据要补齐；不能把当前状态整体写成未开始，也不能写成 Codex 客户端已完成。
+### 自有系统文件夹选择组件
 
-门槛通过后，使用临时合成 Git 仓库实现纵向流程：选择仓库与固定基点，读取真实变更树和 Diff，保存文件评论及已审状态，重开接续，再检查内容变化和切分支恢复。后续完整范围由[产品](../产品/README.md)定义，QA 验证由[测试](../测试/README.md)维护，避免把合成探针的 schema 沿用成正式审阅数据模型。
+用户明确要求访达式文件夹选择后，新增 [Objective-C 源码](../../native/codex-folder-picker/main.m)、[Info.plist](../../native/codex-folder-picker/Info.plist) 和[构建脚本](../../native/codex-folder-picker/build.cjs)。使用系统 [NSOpenPanel](https://developer.apple.com/documentation/appkit/nsopenpanel) 的单目录选择和 [beginWithCompletionHandler](https://developer.apple.com/library/archive/documentation/FileManagement/Conceptual/FileSystemProgrammingGuide/UsingtheOpenandSavePanels/UsingtheOpenandSavePanels.html) 异步完成回调；当前／最近记录仅作为 directoryURL 初始位置，实际目录与 Git 根仍由 openWorkspace 校验。系统 [activate](https://developer.apple.com/documentation/appkit/nsapplication/activate()) 是激活请求，不保证宿主环境一定将窗口置前，须实测。
 
-正式适配的职责划分如下：
+运行 `node native/codex-folder-picker/build.cjs` 只编译并对自有组件做 ad-hoc 签名，不启动或安装应用。输出为 `artifacts/codex-native/ReviewSlate Folder Picker.app`，bundle ID `org.reviewslate.folderpicker`，版本取当前插件 manifest；arm64 可执行文件约 92 KiB，仅链接系统 AppKit，无第三方 native 依赖。源码沿用项目 MIT；系统框架不随包复制。编译使用相对源路径及 prefix-map，包构建复制完整签名目录并绑定源码／产物哈希。ad-hoc 签名不等于 Developer ID 或公证，最终安装位置和系统隔离行为另验。
 
-| 边界 | 客户端必须保留的约束 | 协作方向 |
+运行时默认从包内 `native/ReviewSlate Folder Picker.app/Contents/MacOS/ReviewSlateFolderPicker` 启动固定程序；开发可显式指定 `REVIEW_SLATE_FOLDER_PICKER`，页面无法改变该路径。启动不经过 shell，不接受任意命令，清理继承环境，只回传有界 JSON 到组件专用 `_meta`。start／poll／cancel 经认证后旁路业务串行队列，慢 Git 操作不阻塞取消或续租。组件退出后立即回收，选择结果不落盘；超时、租约、父进程与 EOF 收尾见[客户端方案](Codex客户端方案.md#二仓库cr-与页面如何绑定)。
+
+关闭系统“前往文件夹”辅助窗口后，主选择面板必须继续存在。组件的 `applicationShouldTerminateAfterLastWindowClosed` 返回 NO，只由选择完成、显式取消、超时或父进程退出结束本次请求。系统选择、取消及 GoTo 的既有独立应用证据见[验证记录](../测试/验证记录.md)。0.1.2 的 native 源码与构建器未变，版本更新后的签名和包一致性已由安全审核核对；真实 Codex 的宿主权限与生命周期仍待验证。开发包缺少 helper 时，界面说明不可用并保留手动路径入口。
+
+Git 仍是本机前置条件，macOS 首个候选使用已核验的系统 Git 路径并检查可执行版本，缺失时说明安装条件，插件不触发系统安装器。Git 参数和只读白名单继续由引擎控制，server 不从页面接收任意命令。进程环境应清理不需要的 `NODE_OPTIONS`、加载器与调试注入变量，不在 stdout 输出诊断；stderr 仅保留错误分类与请求关联 ID，不记录代码、评论或完整个人路径。
+
+捆绑 Node 可消除用户安装 Node 与 GUI PATH 差异，但增加下载／解压体积、平台分包、更新及签名兼容成本。最终 ZIP 为 37,657,153 字节，清单所列文件总量为 115,692,842 字节；Node 为 113,002,944 字节，UI 为 848,273 字节，server 为 1,526,718 字节。包冷启动和峰值内存尚未测量，不宣称与现有 VSIX 同等体积。Node 分发包含自己的 MIT 条款及多项第三方通知，必须保留该二进制对应的完整许可文本，不能只保留项目 MIT。构建同时收集实际协议／编辑器依赖的许可及来源。[Node 上游许可](https://github.com/nodejs/node/blob/v22.x/LICENSE)
+
+可移植性测试必须使用最终解压和宿主缓存安装路径：含空格／非 ASCII 路径、最小 PATH、不在开发仓库中启动、搬移重装、升级后保留数据。核对 command、args、cwd、server/UI/manifest 同版，运行时可执行位、系统隔离与宿主安全策略均需实际检查。若目标 Codex 不支持根标准配置，记录具体安装／展开失败并交回决定，不能继续发布带个人绝对路径的包。插件支持本地安装与官方目录资格分开，当前没有上架授权或资格结论。
+
+## 正式实现的验证门槛
+
+未知能力收敛到下表；内部状态、草稿与数据设计已经选定，不再等待宿主替我们提供编辑器状态。每个 gate 都有明确证据和失败后的处理。
+
+| Gate | 需取得的实际证据 | 当前状态与影响 |
 | --- | --- | --- |
-| 核心复用 | 复用 Git、内容身份、CR、锚点和持久化，不绕过现有服务层；`extension.ts` 的脏文件和陈旧 Diff 检查也需有对应实现 | [本地审阅引擎](../客户端/本地审阅引擎.md) |
-| 可序列化接口 | 明确定义请求身份、版本与错误语义；现有 `ReviewService` 的 Buffer、Map 和异常字符串不是稳定 RPC 契约 | 客户端研发确定字段，代码作为真源 |
-| 数据隔离 | 正式 Codex 数据拟使用仓库内 `.reviewslate/codex/`，尚未实施；不读写现有 `.code-review/` 或其他编辑器存储 | [数据协议](../客户端/数据协议.md)负责格式、迁移、原子写与恢复设计 |
-| 编辑与保存 | 直接编辑须有可靠的保存和脏状态接口；无法保证时提供只读 Diff 与保存后刷新，不虚构可编辑工作区 | 产品、设计确认体验，客户端实现 |
-| 并发与归属 | 路径、分支、CR、内容指纹与评论 revision 都重新校验；旧页面、双窗口和中断重试不能写错对象 | 核心提供写入 guard，客户端绑定展示身份 |
-| Agent 接续 | 查看只取当前所需数据；用户发起处理后读取指定 CR，回执与人工复核分开，不替用户解决评论 | 产品与核心定义交接语义，客户端提供入口 |
+| H1 真实 UI 与本地通道 | 普通合法插件入口挂载 iframe；页面调用 app-only 工具；合成内容保存后重开；组件专用 `_meta` 不变成模型可见正文 | **未执行完整链路**。已安装和工具调用证据保留；独立壳不代签。失败则完整 Codex 工作区仍阻塞 |
+| H2 仓库范围与隔离 | 用户在工作区选定合成仓库；本地 stdio 经宿主权限访问其 Git 与本应用目录；越界路径、链接、拒绝权限有可识别结果 | **未完成完整宿主验证**。已有本地合成仓库与独立应用结果，真实 Codex 的权限和异常矩阵仍待补证 |
+| H3 最终包与进程生命周期 | 根标准配置在实际缓存路径正确展开、包内运行时启动；面板／会话／插件／宿主关闭分别核验；退出后无 HTTP 监听和孤儿工具进程 | **部分证据**。正式入口可发现，0.1.2 最终搬移检查、本地安装／启用和 35 个缓存文件一致性均通过；真实 Codex 各级生命周期仍待验 |
+| E1 工作区编辑保存 | 候选保存器保持编码／权限／路径边界；外部竞争版本不静默丢失；保存中断和回执丢失可判定，真实 iframe 恢复缓冲并显式保存 | **未实施／未执行**。按[编辑方案](Codex客户端方案.md#六直接编辑的候选实现与门槛)验证；不通过交产品确定 AC-06，不能擅自降级并宣称完整交付 |
 
-运行时、可搬移打包、声明能力、正式源码位置及真实宿主交互仍需闭环。若目标桥接验证失败，应记录具体缺失能力并暂停完整交互版选择；不自动改成云服务、localhost 网站或仅 Skill 交接，也不以新增跨应用同步绕开问题。
+H1 的合法补证由主负责人协调宿主允许的插件专用入口或实际操作。当前对 Codex 主应用的自动控制已有拒绝，不能复制、改名、重签目标应用，也不能换一种自动化工具绕过。没有可用的合法 UI 接口时明确保留未执行，不阻止设计、独立原型和合成仓库验证继续。
+
+这些 gate 通过后，仍须完成产品的整轮合成仓库任务、故障恢复和同一候选包的 QA／设计／产品验收。技术探针的 schema 不进入正式审阅协议，工具调用成功、模型能读到结果与真实人工审阅可用是不同层次的结论。

@@ -31,7 +31,13 @@
     "compile": "tsc -p .",
     "test": "npm run compile && node --test test/*.test.cjs",
     "package": "npm run compile && node scripts/package.cjs",
-    "vscode:prepublish": "npm run compile"
+    "vscode:prepublish": "npm run compile",
+    "typecheck:codex-ui": "tsc -p web/codex/tsconfig.json --noEmit",
+    "build:codex": "node scripts/build-codex.cjs",
+    "test:codex": "npm run compile && node --test test/codex/*.test.cjs",
+    "prepare:codex-runtime": "node scripts/prepare-codex-runtime.cjs",
+    "package:codex": "node scripts/build-codex.cjs --package",
+    "check:codex-package": "node scripts/check-codex-package.cjs"
   },
   "contributes": {
     "views": {
@@ -406,10 +412,18 @@
     "minimatch": "11.0.1"
   },
   "devDependencies": {
+    "@codemirror/commands": "6.11.1",
+    "@codemirror/merge": "6.12.3",
+    "@codemirror/state": "6.7.6",
+    "@codemirror/view": "6.43.15",
+    "@modelcontextprotocol/ext-apps": "1.7.5",
+    "@modelcontextprotocol/sdk": "1.32.2",
     "@types/node": "^22.0.0",
     "@types/vscode": "1.107.0",
     "@vscode/vsce": "4.1.0",
-    "typescript": "~5.9.3"
+    "esbuild": "0.28.2",
+    "typescript": "~5.9.3",
+    "zod": "4.6.7"
   },
   "repository": {
     "type": "git",
