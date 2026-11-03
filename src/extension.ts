@@ -14,6 +14,11 @@ import { ReviewSettings, SettingNode } from './settings';
 import { filesIn, markRequest, ReviewTree, TreeNode } from './tree';
 
 interface DocumentData { selection: Selection; side: 'left' | 'right'; text: string; full: boolean; root: string; live?: boolean }
+type CurrentNavigation = () => boolean;
+interface PanelContext {
+  service?: ReviewService; selected?: Selection; anchor?: Anchor; overview?: string;
+  session?: Selection['session']; current: CurrentNavigation;
+}
 
 export class ReviewExtension implements vscode.Disposable {
   service?: ReviewService;
@@ -33,6 +38,10 @@ export class ReviewExtension implements vscode.Disposable {
   private renderedDirty = '';
   private tail: Promise<void> = Promise.resolve();
   private pending = 0;
+  private queuedRefresh?: { promise: Promise<void>; notify: boolean };
+  private navigation = 0;
+  private readonly openings = new Set<Promise<void>>();
+  private readonly openingDiffs = new Map<string, number>();
   private disposed = false;
   private activeTab?: vscode.Tab;
   private activeTabInput?: unknown;
@@ -41,8 +50,10 @@ export class ReviewExtension implements vscode.Disposable {
   readonly ready: Promise<void>;
   constructor(private readonly context: vscode.ExtensionContext) {
     this.panel = new CommentPanel(context.extensionPath, message => {
+      this.navigation++;
+      const captured = this.panelContext();
       void this.enqueue(async () => {
-        try { await this.panelAction(message); this.panel.acknowledge(message.requestId); }
+        try { await this.panelAction(message, captured); this.panel.acknowledge(message.requestId); }
         catch (error) { this.panel.acknowledge(message.requestId, messageOf(error)); throw error; }
       });
     });
@@ -60,33 +71,39 @@ export class ReviewExtension implements vscode.Disposable {
           return entry.text;
         }
       }));
-    const commands: Record<string, (node?: TreeNode) => Promise<void>> = {
+    const commands: Record<string, (node: TreeNode | undefined, current: CurrentNavigation) => Promise<void>> = {
       configure: () => this.configure(), defaultBase: () => this.configure(true), repository: () => this.selectRepository(true),
       newReview: () => this.configure(false, true),
       newFromCommit: () => this.newFromCommit(),
       copyBase: node => this.copyBase(node),
       expandAll: () => this.tree.expandAll(this.view),
       collapseAll: async () => { await vscode.commands.executeCommand('workbench.actions.treeView.codeReview.files.collapseAll'); },
-      refresh: () => this.refresh(), open: node => this.open(node), comment: node => this.open(node),
-      commentDirectory: node => this.openDirectory(node),
-      since: node => this.open(node, true),
+      refresh: () => this.refresh(), open: (node, current) => this.open(node, false, current), comment: (node, current) => this.open(node, false, current),
+      commentDirectory: (node, current) => this.openDirectory(node, current),
+      since: (node, current) => this.open(node, true, current),
       mark: node => this.mark(node, true), unmark: node => this.mark(node, false),
-      commentSelection: () => this.selectCode(), handoff: () => this.handoff(), pending: () => this.showPending()
+      commentSelection: (_node, current) => this.selectCode(current), handoff: () => this.handoff(), pending: (_node, current) => this.showPending(current)
     };
     for (const [name, handler] of Object.entries(commands)) {
-      this.listeners.push(vscode.commands.registerCommand('codeReview.' + name, (node?: TreeNode) => this.enqueue(() => handler(node))));
+      this.listeners.push(vscode.commands.registerCommand('codeReview.' + name, (node?: TreeNode) => {
+        if ((name === 'open' || name === 'comment') && node?.path && node.kind !== 'folder') return this.openImmediate(node);
+        if (name === 'refresh') return this.requestRefresh(true);
+        this.navigation++;
+        const current = this.navigationGuard();
+        return this.enqueue(() => handler(node, current));
+      }));
     }
     this.listeners.push(vscode.commands.registerCommand('codeReview.fromCommit', (sourceControl: unknown, commit: unknown) =>
-      this.enqueue(() => this.fromCommit(sourceControl, commit))));
+      { this.navigation++; return this.enqueue(() => this.fromCommit(sourceControl, commit)); }));
     for (const action of ['openReview', 'deleteReview', 'restoreReview', 'purgeReview'] as const) {
-      this.listeners.push(vscode.commands.registerCommand('codeReview.' + action, (node?: HistoryNode) => this.enqueue(async () => {
+      this.listeners.push(vscode.commands.registerCommand('codeReview.' + action, (node?: HistoryNode) => { this.navigation++; return this.enqueue(async () => {
         if (!this.service || !node?.review) throw new Error('请先选择一条审阅记录');
         if (action === 'purgeReview') { await this.purgeReview(node); return; }
         if (action === 'openReview') await this.service.openReview(node.review.id);
         else await this.service.deleteReview(node.review.id, action === 'deleteReview');
         await this.refresh();
         if (action === 'deleteReview') void vscode.window.showInformationMessage('已归档这条 CR，可在审阅记录的「已归档」中恢复。');
-      })));
+      }); }));
     }
     this.listeners.push(this.view.onDidChangeCheckboxState(event => {
       void this.enqueue(async () => {
@@ -95,9 +112,9 @@ export class ReviewExtension implements vscode.Disposable {
         for (const [node, state] of items) await this.mark(node, state === vscode.TreeItemCheckboxState.Checked);
       });
     }));
-    this.listeners.push(this.view.onDidChangeVisibility(event => { if (event.visible && !this.pending) void this.enqueue(() => this.refresh(), false); }));
-    this.listeners.push(this.historyView.onDidChangeVisibility(event => { if (event.visible && !this.pending) void this.enqueue(() => this.refresh(), false); }));
-    this.listeners.push(vscode.workspace.onDidSaveTextDocument(() => { if (this.service) void this.enqueue(() => this.refresh(), false); }));
+    this.listeners.push(this.view.onDidChangeVisibility(event => { if (event.visible && !this.pending) void this.requestRefresh(); }));
+    this.listeners.push(this.historyView.onDidChangeVisibility(event => { if (event.visible && !this.pending) void this.requestRefresh(); }));
+    this.listeners.push(vscode.workspace.onDidSaveTextDocument(() => { if (this.service) void this.requestRefresh(); }));
     this.listeners.push(vscode.workspace.onDidChangeTextDocument(() => {
       if (JSON.stringify([...this.dirtyFiles()].sort()) !== this.renderedDirty) this.render();
     }));
@@ -109,12 +126,49 @@ export class ReviewExtension implements vscode.Disposable {
       tabs.onDidChangeTabGroups(() => this.activeTabChanged())
     );
     this.timer = setInterval(() => {
-      if (!this.pending && (this.view.visible || this.historyView.visible) && this.service) void this.enqueue(() => this.refresh(), false);
+      if (!this.pending && (this.view.visible || this.historyView.visible) && this.service) void this.requestRefresh();
     }, 5000);
     this.ready = this.enqueue(() => this.selectRepository(false), false);
   }
-  whenIdle(): Promise<void> { return this.tail; }
-  private enqueue(action: () => Promise<void>, notify = true): Promise<void> {
+  async whenIdle(): Promise<void> {
+    let tail: Promise<void>;
+    do { tail = this.tail; await Promise.all([tail, ...this.openings]); }
+    while (tail !== this.tail || this.openings.size);
+  }
+  private navigationGuard(): CurrentNavigation {
+    const navigation = this.navigation;
+    return () => !this.disposed && navigation === this.navigation;
+  }
+  private panelContext(): PanelContext {
+    return { service: this.service, selected: this.selected, anchor: this.anchor, overview: this.overview,
+      session: this.service?.view.session, current: this.navigationGuard() };
+  }
+  private openImmediate(node: TreeNode): Promise<void> {
+    const navigation = ++this.navigation, service = this.service, session = service?.view.session?.id;
+    const current = (): boolean => !this.disposed && navigation === this.navigation && service === this.service && session === service?.view.session?.id;
+    const task = this.open(node, false, current).then(() => { if (current()) this.render(); }).catch(error => {
+      if (!current()) return;
+      const text = messageOf(error); this.render(text);
+      void vscode.window.showErrorMessage('ReviewSlate：' + text);
+    }).finally(() => { this.openings.delete(task); });
+    this.openings.add(task);
+    return task;
+  }
+  private requestRefresh(notify = false): Promise<void> {
+    if (this.queuedRefresh) {
+      this.queuedRefresh.notify ||= notify;
+      return this.queuedRefresh.promise;
+    }
+    const request = { promise: Promise.resolve(), notify };
+    this.queuedRefresh = request;
+    request.promise = this.enqueue(async () => {
+      // A save during this scan needs one following scan; saves before it starts share this one.
+      this.queuedRefresh = undefined;
+      await this.refresh();
+    }, () => request.notify);
+    return request.promise;
+  }
+  private enqueue(action: () => Promise<void>, notify: boolean | (() => boolean) = true): Promise<void> {
     this.pending++;
     const task = this.tail.then(async () => {
       if (this.disposed) return;
@@ -122,7 +176,7 @@ export class ReviewExtension implements vscode.Disposable {
       catch (error) {
         const text = messageOf(error);
         this.render(text);
-        if (notify) void vscode.window.showErrorMessage('ReviewSlate：' + text);
+        if (typeof notify === 'function' ? notify() : notify) void vscode.window.showErrorMessage('ReviewSlate：' + text);
       }
     }).finally(() => { this.pending--; });
     this.tail = task.catch(() => {});
@@ -168,12 +222,19 @@ export class ReviewExtension implements vscode.Disposable {
   }
   private async refresh(): Promise<void> {
     if (!this.service) { await this.selectRepository(false); return; }
-    await this.service.refresh();
+    const navigation = this.navigation, service = this.service;
+    await service.refresh();
     await this.refreshSettings();
-    if (this.selected?.session.id !== this.service.view.session?.id) { this.selected = undefined; this.anchor = undefined; }
-    if (this.selected && !this.anchor && this.selected.target !== 'directory') {
-      const row = this.service.view.files.find(file => file.path === this.selected!.file);
-      if (!row?.error) this.selected = row ? this.service.selection(row.path) : await this.service.capture(this.selected.file);
+    // A file opened while the scan was running owns its freshly read selection.
+    if (navigation !== this.navigation || service !== this.service) return;
+    if (this.selected?.session.id !== service.view.session?.id) { this.selected = undefined; this.anchor = undefined; }
+    const selected = this.selected;
+    if (selected && !this.anchor && selected.target !== 'directory') {
+      const row = service.view.files.find(file => file.path === selected.file);
+      if (!row?.error) {
+        const captured = row ? service.selection(row.path) : await service.capture(selected.file);
+        if (navigation === this.navigation && service === this.service && selected === this.selected && !this.anchor) this.selected = captured;
+      }
     }
   }
   private entryFor(uri: vscode.Uri): DocumentData | undefined {
@@ -199,21 +260,44 @@ export class ReviewExtension implements vscode.Disposable {
     this.activeEditorChanged(vscode.window.activeTextEditor);
   }
   private activeEditorChanged(editor: vscode.TextEditor | undefined): void {
-    this.activeTabGroup = vscode.window.tabGroups?.activeTabGroup;
-    this.activeTab = this.activeTabGroup?.activeTab;
-    this.activeTabInput = this.activeTab?.input;
-    const entry = editor && this.entryFor(editor.document.uri);
+    const tabs = vscode.window.tabGroups, group = tabs?.activeTabGroup, tab = group?.activeTab;
+    if (tabs && !tab && this.openingDiffs.size) {
+      // Replacing a preview can briefly remove its tab while activeTextEditor
+      // still names the old file. Wait for a real tab instead of treating this
+      // intermediate host state as a new navigation or a comment target.
+      void vscode.commands.executeCommand('setContext', 'codeReview.commentable', false);
+      return;
+    }
+    const changed = !tabs || group !== this.activeTabGroup || tab !== this.activeTab || tab?.input !== this.activeTabInput;
+    this.activeTabGroup = group; this.activeTab = tab; this.activeTabInput = tab?.input;
+    const focused = editor && this.entryFor(editor.document.uri);
+    if (!changed) {
+      // Editor focus/side notifications can still refer to the previous Diff while
+      // vscode.diff opens the next tab. They are not a new navigation intent.
+      void vscode.commands.executeCommand('setContext', 'codeReview.commentable', !!focused?.full);
+      return;
+    }
+    const input = this.activeTabInput;
+    const opening = input && input instanceof vscode.TabInputTextDiff ? this.openingDiffs.get(input.original.toString()) : undefined;
+    if (opening === undefined) this.navigation++;
+    else if (opening !== this.navigation) return;
+    // Tab and editor events are delivered separately. The immutable original URI
+    // identifies the new tab even if activeTextEditor still describes the old one.
+    const entry = focused || (input && input instanceof vscode.TabInputTextDiff ? this.entryFor(input.original) : undefined);
     void vscode.commands.executeCommand('setContext', 'codeReview.commentable', !!entry?.full);
     if (entry) {
-      if (entry.live && this.service?.view.files.some(file => file.path === entry.selection.file && !file.error)) entry.selection = this.service.selection(entry.selection.file);
-      if (this.selected?.key !== entry.selection.key) this.anchor = undefined;
-      this.selected = entry.selection; this.overview = undefined; this.renderPanel();
-    } else {
-      const input = vscode.window.tabGroups?.activeTabGroup.activeTab?.input;
-      if (editor && input && input instanceof vscode.TabInputTextDiff) {
-        this.selected = undefined; this.anchor = undefined; this.overview = undefined;
-        this.renderPanel(this.documents.has(input.original.toString()) ? '此 Diff 不属于当前审阅，请从变更文件重新打开。' : undefined);
-      }
+      // The original is a snapshot even when this tab has an editable right side.
+      // Resolve that side through the same original-URI scope check, independently
+      // of which editor notification arrived first. Read-only tabs keep their pair.
+      const working = input && input instanceof vscode.TabInputTextDiff ? this.entryFor(input.modified) : entry;
+      const selection = working?.live && working.full && this.service && !this.service.view.error &&
+        this.service.view.files.some(file => file.path === entry.selection.file && !file.error) ?
+        this.service.selection(entry.selection.file) : entry.selection;
+      if (this.selected?.key !== selection.key) this.anchor = undefined;
+      this.selected = selection; this.overview = undefined; this.renderPanel();
+    } else if (input && input instanceof vscode.TabInputTextDiff) {
+      this.selected = undefined; this.anchor = undefined; this.overview = undefined;
+      this.renderPanel(this.documents.has(input.original.toString()) ? '此 Diff 不属于当前审阅，请从变更文件重新打开。' : undefined);
     }
   }
   private dirtyFiles(): Set<string> {
@@ -364,7 +448,7 @@ export class ReviewExtension implements vscode.Disposable {
       if (comment.state === 'open') target.pending++; else target.resolved++;
       targets.set(key, target);
     }
-    const current = data?.files.find(file => file.path === selection?.file);
+    const current = selection?.target !== 'directory' ? selection?.pair : undefined;
     const labels = { file: '文件评论', exact: '原位置', moved: '已跟随行号变化', changed: '相关代码已变化', unavailable: '位置待确认' };
     this.panel.render({
       repositoryKey: this.service ? hash(this.service.repo.root) : undefined,
@@ -382,7 +466,7 @@ export class ReviewExtension implements vscode.Disposable {
       cards: (data?.notes.comments || []).filter(comment => overview ? comment.state === 'open' : sameTarget(comment, selection?.file, selection?.target))
         .sort((a, b) => overview ? a.path.localeCompare(b.path) || (a.target || 'file').localeCompare(b.target || 'file') || a.createdAt.localeCompare(b.createdAt) : 0).map(comment => {
         const row = overview ? data?.files.find(file => file.path === comment.path) : current;
-        const location = locate(comment.anchor, row?.error ? undefined : row), reply = data?.notes.replies.get(comment.id);
+        const location = locate(comment.anchor, row && 'error' in row && row.error ? undefined : row), reply = data?.notes.replies.get(comment.id);
         return {
           id: comment.id, revision: comment.revision, body: comment.body, status: noteStatus(comment, reply),
           targetLabel: overview ? comment.path + (comment.target === 'directory' ? '/' : '') : undefined,
@@ -408,8 +492,7 @@ export class ReviewExtension implements vscode.Disposable {
     };
     guard(); await service.mark(request, guard);
   }
-  private document(selection: Selection, snapshot: Pair, side: 'left' | 'right', full: boolean, metadata: boolean): vscode.Uri {
-    const root = this.service!.repo.root;
+  private document(selection: Selection, snapshot: Pair, side: 'left' | 'right', full: boolean, metadata: boolean, root = this.service!.repo.root): vscode.Uri {
     const identity = hash(root + '\0' + selection.session.id + '\0' + (full ? 'full' : 'since') + '\0' + side);
     const uri = vscode.Uri.from({ scheme: 'code-review', authority: identity, path: '/' + selection.file });
     const previous = this.documents.get(uri.toString()), text = snapshotText(snapshot[side], metadata);
@@ -417,42 +500,60 @@ export class ReviewExtension implements vscode.Disposable {
     if (previous && previous.text !== text) this.documentChanged.fire(uri);
     return uri;
   }
-  private async workingDocument(selection: Selection): Promise<vscode.Uri | undefined> {
-    const file = await this.service!.repo.editablePath(selection.file, selection.pair.right);
-    if (!file) return;
+  private async workingDocument(selection: Selection, service = this.service!, current: () => boolean = () => true): Promise<vscode.Uri | undefined> {
+    const file = await service.repo.editablePath(selection.file, selection.pair.right);
+    if (!file || !current()) return;
     const uri = vscode.Uri.file(file);
-    this.documents.set(uri.toString(), { selection, side: 'right', full: true, live: true, root: this.service!.repo.root, text: snapshotText(selection.pair.right) });
+    this.documents.set(uri.toString(), { selection, side: 'right', full: true, live: true, root: service.repo.root, text: snapshotText(selection.pair.right) });
     return uri;
   }
-  private async showDiff(selection: Selection, pair: Pair, title: string, full = true): Promise<void> {
+  private async showDiff(selection: Selection, pair: Pair, title: string, full = true, service = this.service!, current: () => boolean = () => true): Promise<void> {
     const metadata = pair.left.mode !== pair.right.mode && pair.left.data.equals(pair.right.data);
-    const left = this.document(selection, pair, 'left', full, metadata);
-    const right = (full && !metadata ? await this.workingDocument(selection) : undefined) || this.document(selection, pair, 'right', full, metadata);
-    await vscode.commands.executeCommand('vscode.diff', left, right, title + ' · ' + selection.file, { preview: true });
+    const working = full && !metadata ? await this.workingDocument(selection, service, current) : undefined;
+    await service.assertCurrent(selection.session);
+    if (!current() || service !== this.service || service.view.session?.id !== selection.session.id) return;
+    const left = this.document(selection, pair, 'left', full, metadata, service.repo.root);
+    const right = working || this.document(selection, pair, 'right', full, metadata, service.repo.root);
+    const navigation = this.navigation, identity = left.toString();
+    this.openingDiffs.set(identity, navigation);
+    try { await vscode.commands.executeCommand('vscode.diff', left, right, title + ' · ' + selection.file, { preview: true }); }
+    finally { if (this.openingDiffs.get(identity) === navigation) this.openingDiffs.delete(identity); }
+    if (!current()) return;
     void vscode.commands.executeCommand('setContext', 'codeReview.commentable', full && !metadata);
   }
-  private async open(node?: TreeNode, since = false): Promise<void> {
-    if (node?.kind === 'folder') { await this.openDirectory(node); return; }
+  private async open(node?: TreeNode, since = false, current = this.navigationGuard()): Promise<void> {
+    if (!current()) return;
+    if (node?.kind === 'folder') { await this.openDirectory(node, current); return; }
     if (!node?.path || !this.service) { void vscode.window.showInformationMessage('请先点击一个文件'); return; }
-    await this.refresh();
-    const selected = this.service.selection(node.path);
+    const service = this.service;
+    if (since) await this.refresh();
+    if (!current()) return;
+    const selected = await service.openFile(node.path, node.session, current);
+    if (!selected || !current() || service !== this.service) return;
     this.selected = selected; this.anchor = undefined; this.overview = undefined;
     this.renderPanel(); this.panel.show();
-    if (!since) { await this.showDiff(selected, selected.pair, '基点 → 当前工作区'); return; }
-    const previous = await this.service.previous(node.path);
+    if (!since) { await this.showDiff(selected, selected.pair, '基点 → 当前工作区', true, service, current); return; }
+    const previous = await service.previous(node.path);
+    if (!current()) return;
     if (!previous) { void vscode.window.showInformationMessage('此文件还没有已审快照'); return; }
     const sides = (['right', 'left'] as const).filter(side => snapshotId(previous[side]) !== snapshotId(selected.pair[side]));
     if (!sides.length) { void vscode.window.showInformationMessage('上次审阅后文件没有变化'); return; }
     const choice = sides.length === 1 ? sides[0] : (await vscode.window.showQuickPick(sides.map(side => ({ label: side === 'right' ? '工作区的变化' : '基点的变化', side })), { title: '查看哪一侧的变化' }))?.side;
-    if (choice) await this.showDiff(selected, { left: previous[choice], right: selected.pair[choice] }, '上次已审 → 现在', false);
+    if (choice) await this.showDiff(selected, { left: previous[choice], right: selected.pair[choice] }, '上次已审 → 现在', false, service, current);
   }
-  private async openDirectory(node?: TreeNode): Promise<void> {
+  private async openDirectory(node?: TreeNode, current = this.navigationGuard()): Promise<void> {
+    if (!current()) return;
     if (node?.kind !== 'folder' || !node.path || !this.service) throw new Error('请先选择一个目录');
+    const service = this.service;
     await this.refresh();
-    this.selected = this.service.directorySelection(node.path); this.anchor = undefined; this.overview = undefined;
+    if (!current() || service !== this.service) return;
+    if (node.session && node.session !== service.view.session?.id) throw new Error('CR 已改变，请从当前文件树重新选择目录');
+    this.selected = service.directorySelection(node.path); this.anchor = undefined; this.overview = undefined;
     this.renderPanel(); this.panel.show();
   }
-  private async selectCode(): Promise<void> {
+  private async selectCode(current = this.navigationGuard()): Promise<void> {
+    if (!current()) return;
+    const service = this.service;
     const editor = vscode.window.activeTextEditor;
     const entry = editor && this.entryFor(editor.document.uri);
     if (!entry || !entry.full) throw new Error('请在本工具的完整 Diff 中选中代码，再添加评论');
@@ -461,70 +562,85 @@ export class ReviewExtension implements vscode.Disposable {
     if (entry.live) {
       if (editor!.document.isDirty) throw new Error('请先保存代码修改，再选中代码添加评论');
       await this.refresh();
+      if (!current() || service !== this.service) return;
       if (!this.entryFor(editor!.document.uri)) throw new Error('基点已改变，请重新打开 Diff 后再评论');
-      const current = await this.service!.capture(entry.selection.file);
+      const captured = await service!.capture(entry.selection.file);
       const normalize = (text: string): string => text.replace(/^\uFEFF/, '').replace(/\r\n/g, '\n');
-      if (editor!.document.isDirty || !await this.service!.repo.editablePath(current.file, current.pair.right) ||
-          normalize(editor!.document.getText()) !== normalize(decode(current.pair.right.data))) throw new Error('编辑器与已保存文件不一致，请保存或重新打开 Diff 后再评论');
-      entry.selection = current;
+      const editable = await service!.repo.editablePath(captured.file, captured.pair.right);
+      if (!current() || service !== this.service) return;
+      if (editor!.document.isDirty || !editable ||
+          normalize(editor!.document.getText()) !== normalize(decode(captured.pair.right.data))) throw new Error('编辑器与已保存文件不一致，请保存或重新打开 Diff 后再评论');
+      entry.selection = captured;
     }
+    if (!current()) return;
     const end = selection.end.line > selection.start.line && selection.end.character === 0 ? selection.end.line - 1 : selection.end.line;
     this.selected = entry.selection; this.overview = undefined;
     this.anchor = anchorFor(entry.selection.pair[entry.side], entry.side, selection.start.line, end);
     this.panel.show(); this.renderPanel();
   }
-  private async panelAction(message: PanelMessage): Promise<void> {
+  private async panelAction(message: PanelMessage, context = this.panelContext()): Promise<void> {
+    const { service, selected, anchor, current } = context;
     if (message.action === 'handoff') return this.handoff();
-    if (message.action === 'pending') return this.showPending();
+    if (message.action === 'pending') return this.showPending(current);
     if (message.action === 'selection') {
-      if (this.selected?.target === 'directory') throw new Error('目录评论不绑定代码行，请先打开需要评论的文件');
-      return this.selectCode();
+      if (selected?.target === 'directory') throw new Error('目录评论不绑定代码行，请先打开需要评论的文件');
+      return this.selectCode(current);
     }
-    const overview = !!this.overview && this.overview === this.pendingKey() && message.key === this.overview;
-    if (!this.service || (!overview && (!this.selected || message.key !== this.selected.key))) throw new Error('当前评论对象已切换，草稿已保留');
-    const service = this.service, selected = this.selected;
-    const session = overview ? service.view.session! : selected!.session;
+    if (['openTarget', 'locate', 'clear'].includes(message.action) && !current()) return;
+    const overviewKey = service && context.session ? hash(service.repo.root + '\0' + context.session.id + '\0pending-comments') : undefined;
+    const overview = !!context.overview && context.overview === overviewKey && message.key === context.overview;
+    if (!service || service !== this.service || (!overview && (!selected || message.key !== selected.key))) throw new Error('当前评论对象已切换，草稿已保留');
+    const session = overview ? context.session : selected!.session;
+    if (!session) throw new Error('当前审阅已切换，草稿已保留');
     await service.assertCurrent(session);
     const guard = (): Promise<void> => service.assertCurrent(session);
     if (message.action === 'openTarget') {
       await this.refresh(); await guard();
+      if (!current() || service !== this.service) return;
       const comment = service.view.notes.comments.find(item => message.id ? item.id === message.id : sameTarget(item, message.path, message.target));
       if (!comment || (!overview && (selected?.target !== 'directory' || !comment.path.startsWith(selected.file + '/')))) throw new Error('该评论位置已变化，请刷新后重试');
       const target = comment.target === 'directory' ? 'directory' : undefined;
       const node = this.tree.findTarget(comment.path, target);
       if (!node || node.session !== session.id) throw new Error('该评论位置已变化，请刷新后重试');
-      if (comment.target === 'directory') await this.openDirectory(node); else await this.open(node);
-      const current = this.tree.findTarget(comment.path, target);
-      if (current?.session === session.id) await this.view.reveal(current, { select: true, focus: true });
+      if (comment.target === 'directory') await this.openDirectory(node, current); else await this.open(node, false, current);
+      const targetNode = this.tree.findTarget(comment.path, target);
+      if (current() && targetNode?.session === session.id) await this.view.reveal(targetNode, { select: true, focus: true });
       return;
     }
     if (overview && ['add', 'clear', 'restore'].includes(message.action)) throw new Error('请先打开具体文件或目录再操作');
     if (message.action === 'delete' || message.action === 'restore') {
-      const notes = this.service.view.notes;
+      const notes = service.view.notes;
       const target = [...notes.comments, ...(notes.deleted || [])].find(item => item.id === message.id && (overview || sameTarget(item, selected?.file, selected?.target)));
       if (!target) throw new Error('评论不存在，请刷新');
-      if (message.action === 'delete') await this.service.comments.remove(target.id, message.revision || '', guard);
-      else await this.service.comments.restore(target.id, message.revision || '', guard);
+      if (message.action === 'delete') await service.comments.remove(target.id, message.revision || '', guard);
+      else await service.comments.restore(target.id, message.revision || '', guard);
       await this.refresh(); return;
     }
-    if (message.action === 'clear') { this.anchor = undefined; return; }
-    if (message.action === 'add') {
-      await this.service.add(selected!, message.body || '', this.anchor, message.requestId);
-      this.anchor = undefined; return;
+    if (message.action === 'clear') {
+      if (current() && this.selected?.key === selected?.key && this.anchor === anchor) this.anchor = undefined;
+      return;
     }
-    const comment = this.service.view.notes.comments.find(item => item.id === message.id && (overview || sameTarget(item, selected?.file, selected?.target)));
+    if (message.action === 'add') {
+      await service.add(selected!, message.body || '', anchor, message.requestId);
+      if (current() && this.selected?.key === selected?.key && this.anchor === anchor) this.anchor = undefined;
+      return;
+    }
+    const comment = service.view.notes.comments.find(item => item.id === message.id && (overview || sameTarget(item, selected?.file, selected?.target)));
     if (!comment) throw new Error('评论不存在，请刷新');
     if (message.action === 'locate') {
       await this.refresh();
-      const current = this.service.view.files.find(file => file.path === comment.path);
-      const position = locate(comment.anchor, current?.error ? undefined : current);
-      if (!comment.anchor || position.start === undefined || !current) throw new Error('位置待确认，请结合原片段检查');
-      const selected = this.service.selection(comment.path);
-      const uri = (comment.anchor.side === 'right' && !this.dirtyFiles().has(selected.file) ? await this.workingDocument(selected) : undefined) || this.document(selected, current, comment.anchor.side, true, false);
+      if (!current() || service !== this.service) return;
+      const row = service.view.files.find(file => file.path === comment.path);
+      const position = locate(comment.anchor, row?.error ? undefined : row);
+      if (!comment.anchor || position.start === undefined || !row) throw new Error('位置待确认，请结合原片段检查');
+      const selected = service.selection(comment.path);
+      const working = comment.anchor.side === 'right' && !this.dirtyFiles().has(selected.file) ? await this.workingDocument(selected, service, current) : undefined;
+      if (!current() || service !== this.service) return;
+      const uri = working || this.document(selected, row, comment.anchor.side, true, false, service.repo.root);
       await vscode.window.showTextDocument(uri, { preview: false, selection: new vscode.Range(position.start, 0, position.end! + 1, 0) });
       return;
     }
-    await this.service.comments.update(comment.id, message.revision || '', message.action === 'edit' ? { body: message.body || '' } : { state: message.action === 'resolve' ? 'resolved' : 'open' }, guard);
+    await service.comments.update(comment.id, message.revision || '', message.action === 'edit' ? { body: message.body || '' } : { state: message.action === 'resolve' ? 'resolved' : 'open' }, guard);
     await this.refresh();
   }
   private async handoff(): Promise<void> {
@@ -542,12 +658,16 @@ export class ReviewExtension implements vscode.Disposable {
     await vscode.env.clipboard.writeText(base);
     void vscode.window.showInformationMessage('已复制对比起点的完整 commit SHA');
   }
-  private async showPending(): Promise<void> {
+  private async showPending(current = this.navigationGuard()): Promise<void> {
+    if (!current()) return;
     if (!this.service) throw new Error('请先打开 Git 仓库');
+    const service = this.service;
     await this.refresh();
-    const { session } = this.service.view;
+    if (!current() || service !== this.service) return;
+    const { session } = service.view;
     if (!session) throw new Error('请先选择一轮 CR');
-    await this.service.assertCurrent(session);
+    await service.assertCurrent(session);
+    if (!current() || service !== this.service) return;
     this.overview = this.pendingKey(); this.selected = undefined; this.anchor = undefined;
     this.renderPanel(); this.panel.show();
   }
@@ -557,7 +677,7 @@ export class ReviewExtension implements vscode.Disposable {
   }
   dispose(): void {
     this.disposed = true; clearInterval(this.timer);
-    this.listeners.forEach(listener => listener.dispose()); this.documents.clear();
+    this.listeners.forEach(listener => listener.dispose()); this.documents.clear(); this.openingDiffs.clear();
   }
 }
 export function activate(context: vscode.ExtensionContext): unknown {

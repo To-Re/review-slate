@@ -1,105 +1,91 @@
-# 客户端研发
+# VSIX 客户端
 
-维护责任：前端／客户端研发；最后核查：2026-11-03。适用范围：ReviewSlate 的 VS Code 系客户端与客户端开发维护。状态：现行。核查基线：`689de24` 的 1.0.1 客户端实现；本次未改实现。来源：[扩展入口](../../src/extension.ts)、[平台声明](../../package.json)、[评论面板](../../src/panel.ts)、[页面脚本](../../media/comments.js)及本文链接的代码。
+维护责任：客户端研发；状态：现行；最后核查：2026-11-03。适用范围：`main` 的 VS Code 系 VSIX，含 Trae / Trae CN 兼容目标。依据：`3dd7e30` 加本轮 `src/extension.ts`、`src/git.ts`、`src/review.ts` 性能改动；本地候选版本为 1.0.2，公开版本仍为 1.0.1。实际测试与宿主验证统一见[测试记录](../测试/验证记录.md)。
 
-当前正式客户端是 VSIX。Codex 完整 Git 审阅客户端尚未实现，已有本地合成数据探针，其契约、开发方法与限制由本方向的 [Codex 接入](Codex接入.md)维护。
+本目录维护客户端实现、运行和数据恢复。业务规则见[产品](../产品/README.md)，交互规范见[设计](../设计/README.md)，使用步骤见[用户文档](../用户文档/使用指南.md)。Codex 研发单独保存在 `beta`，不属于本分支客户端与安装包。
 
-本文负责视图、状态、宿主适配和开发发布入口。业务语义见[产品](../产品/README.md)，视觉与交互规则见[设计](../设计/README.md)，业务模块和持久化见[本地审阅引擎](../客户端/本地审阅引擎.md)及[数据协议](../客户端/数据协议.md)，使用步骤见[用户指南](../用户文档/使用指南.md)。测试方法和版本结果统一由[测试](../测试/README.md)维护，不在客户端文档复制执行记录。
+## 平台、模块和原生界面
 
-## 平台与实现入口
+客户端使用 TypeScript、VS Code 扩展 API 和 Node.js 内置模块，没有运行时第三方框架、HTTP 服务或浏览器端独立构建。入口为 `dist/extension.js`；API 下限、工作区信任与虚拟工作区声明以 [`package.json`](../../package.json) 为准。扩展作为 workspace 类型运行，Remote SSH 的 Git、磁盘和存储位于远端扩展宿主；远端兼容性需要单独验收。
 
-ReviewSlate 使用 TypeScript、VS Code 扩展 API 与 Node.js 内置模块，作为 workspace 扩展运行。只在受信任的文件系统工作区启用；不支持浏览器版或虚拟工作区。Remote SSH 下的 Git 与文件操作在远端扩展宿主执行，本机路径不能代替远端路径。版本要求与安装范围见[项目首页](../../README.md#安装)。
-
-树、菜单、选择器和 Diff 使用宿主原生控件，只有评论区使用本地 Webview。没有前端组件框架或独立浏览器构建管线；页面脚本与样式随 VSIX 打包。
-
-| 界面 | 实现 | 适配责任 |
+| 入口 | 代码 | 职责 |
 | --- | --- | --- |
-| 审阅设置 `codeReview.settings` | [settings.ts](../../src/settings.ts) | 当前仓库、默认基点及读取状态；原生选择器由扩展入口协调 |
-| 审阅记录 `codeReview.reviews` | [history.ts](../../src/history.ts) | 新建、当前与历史 CR、归档及删除未完成状态；业务操作交给服务层 |
-| 变更文件 `codeReview.files` | [tree.ts](../../src/tree.ts) | 稳定节点、手动管理 checkbox、目录聚合、评论数量、装饰和可访问名称 |
-| 审阅评论 `codeReview.comments` | [panel.ts](../../src/panel.ts)、[comments.js](../../media/comments.js) | 目标评论、待处理概览、草稿、原卡片编辑及请求确认 |
-| Diff、代码选区和导航 | [extension.ts](../../src/extension.ts) | 虚拟快照、真实文件 URI、活动标签归属、未保存缓冲区检查 |
-| 基点与提交输入 | [baselines.ts](../../src/baselines.ts)、[commit-picker.ts](../../src/commit-picker.ts) | 原生 Quick Pick、SHA 校验与取消反馈 |
+| 审阅设置、基点选择 | [settings.ts](../../src/settings.ts)、[baselines.ts](../../src/baselines.ts)、[commit-picker.ts](../../src/commit-picker.ts) | 仓库、默认基点、原生 Quick Pick 和完整 SHA |
+| 审阅记录 | [history.ts](../../src/history.ts) | 当前 CR、分支分组、归档和删除未完成状态 |
+| 变更文件 | [tree.ts](../../src/tree.ts) | 稳定节点 ID、目录聚合、手动 checkbox、装饰及可访问名称 |
+| 评论区 | [panel.ts](../../src/panel.ts)、[comments.js](../../media/comments.js)、[comments.css](../../media/comments.css) | 本地 Webview、目标评论、概览、草稿及保存确认 |
+| Diff 和宿主事件 | [extension.ts](../../src/extension.ts) | 原生 Diff、虚拟文档、真实文件 URI、导航归属、脏缓冲区和事件调度 |
+| 审阅服务与持久化 | [本地审阅引擎](本地审阅引擎.md)、[数据协议](数据协议.md) | 只读 Git、CR、内容指纹、评论版本、锁和恢复 |
 
-[`package.json`](../../package.json) 声明视图、命令和菜单条件，`ReviewExtension` 注册并协调它们。保持扩展 ID `to-re.code-review`、`codeReview.*` 命令和 `code-review` URI scheme 的兼容；其他宿主适配不能直接假设存在这些扩展点。
+扩展 ID `to-re.code-review`、`codeReview.*` 命令、`code-review` URI 和 `.code-review/` 存储布局保持兼容。树、菜单和 Diff 沿用宿主原生控件；评论面板沿用项目主题变量、图标与文字状态，没有引入新的 UI 风格或组件库。
 
-评论区样式由 [comments.css](../../media/comments.css)维护，使用项目紫蓝主色与状态色，适配宿主深色、高对比度和字体变量。状态同时使用图标或文字，错误区有警示语义，输入框有可访问名称。代码具备这些基础支持，不代表各宿主的键盘、主题及窄面板体验均已验收。
+## 状态与调度
 
-## 状态分工与身份
+`ReviewExtension` 持有当前仓库的 `ReviewService`，把 `service.view` 投影到文件树、记录树与评论区。Webview 不直接读取 Git 或写业务文件。
 
-`ReviewExtension` 当前持有一个 `ReviewService`，把 `service.view` 投影到视图；Webview 不直接读 Git 或写业务 JSON。业务保存与客户端草稿必须分开理解。
-
-| 状态 | 维护位置 | 生命周期与限制 |
+| 状态 | 存放位置 | 生效范围 |
 | --- | --- | --- |
-| 仓库选择、草稿清理标识 | 宿主 `workspaceState` | 重开优先匹配原仓库；永久删除后通知页面清理可识别草稿 |
-| CR、基点、已审快照与评论 | 服务层及核心存储 | UI 展示读取结果；格式、归属和备份以[数据协议](../客户端/数据协议.md)为准 |
-| 当前目标、选区、概览、Diff 文档映射 | 扩展实例内存 | 随交互更新；切换 CR 后丢弃失配的当前目标和锚点 |
-| 新评论、原评论编辑草稿 | Webview `getState()` / `setState()` | 按目标隔离；保留原评论 ID/revision 与编辑前草稿；不属于已保存评论 |
-| 在途页面请求 | `comments.js` 的 `pending` Map | 等待对应 ack，禁用重复操作；没有跨进程恢复保证 |
+| CR、固定基点、进度和快照 | 宿主 `globalStorageUri` | 由核心读取与校验，支持本扩展历史格式 |
+| 评论、Agent 回执、交接清单 | 仓库 `.code-review/` | 按 CR scope 和评论 revision 区分 |
+| 选择的仓库、草稿清理标识 | 宿主 `workspaceState` | 当前工作区 |
+| 当前目标、选区、概览、Diff 映射 | 扩展内存 | 当前实例；不承诺跨重启导航恢复 |
+| 评论草稿和编辑草稿 | Webview `getState()` / `setState()` | 按仓库、CR、路径、目标类型隔离 |
 
-[`Selection`](../../src/review.ts) 的 `key` 与 `draftKey` 用途不同。文件 `key` 包含仓库、CR、路径及左右内容指纹，约束当前写入；`draftKey` 包含仓库、CR 与路径，内容刷新后仍可接续草稿。目录另含目标类型，待处理概览使用 CR 级独立 key。页面不得自行重建这些值或用草稿身份代替写入身份。
+写入、配置、目录操作及完整刷新仍串行执行。普通文件的完整 Diff 使用只读旁路，可与完整扫描并行；它不持久化进度或评论。`whenIdle()` 等待队列和已启动的文件打开任务，供模拟宿主验证使用。
 
-命令、页面消息和刷新经 `enqueue()` 串行处理。文档保存、文件树或记录树显示会触发刷新；这些树可见且没有排队操作时每 5 秒刷新。缓冲区变化先更新“未保存”显示，不把未保存文本当成磁盘快照。`dispose()` 清理监听器、定时器及文档映射，并阻止尚未开始的排队任务启动；已经开始的异步任务没有取消或等待完成保证，仍可能执行后续 I/O 与渲染。
+保存事件、显式刷新和视图重新显示合并尚未开始的刷新请求。扫描中再收到保存会保留一次后续完整刷新，避免吞掉扫描期间发生的变化。文件树或记录树可见且队列空闲时，仍每 5 秒刷新。缓冲区修改只改变“未保存”显示，不能作为已保存快照。
 
-视图需区分未选仓库、未选 CR、无变更、读取失败与未保存。读取失败提供重试并撤去有效写入 key；未保存、失败或仅保留评论的文件没有普通已审 checkbox。已审计数排除失败和未保存文件，目录按相关文件聚合，checkbox 的瞬时外观不构成持久化事实。
+完整刷新更新整树和评论；打开文件只复读该路径并更新它的行，不宣称其他路径已经重新扫描。后台刷新完成不会覆盖期间新打开文件的选择。全仓扫描没有用户取消入口，Git 子进程各自有超时。关闭扩展会清除监听器、定时器和文档映射，阻止未开始的队列任务；已启动的读写不保证被中断，迟到的文件打开不会再展示 Diff。
 
-## 页面请求与保存确认
-
-消息字段以 [`PanelModel` / `PanelMessage`](../../src/panel.ts) 为真源。页面经 `acquireVsCodeApi().postMessage()` 发送动作；宿主发送 `render` 与带 `requestId` 的 `ack`。这是宿主消息通道，没有 HTTP 接口。
+## 文件打开与导航安全
 
 ```mermaid
 sequenceDiagram
-    participant UI as 评论 Webview
-    participant Host as 客户端适配层
-    participant Core as 审阅与评论核心
-    UI->>UI: 保留草稿，登记 requestId
-    UI->>Host: 动作、key、目标与版本
-    Host->>Host: 检查输入和页面归属
-    Host->>Core: 执行操作，写入前再核对 CR
-    alt 操作与必要刷新成功
-        Core-->>Host: 完成
-        Host-->>UI: ack(requestId)，随后 render
-        UI->>UI: 仅清理该请求对应的未变草稿
-    else 校验、保存或发布失败
-        Core-->>Host: 错误
-        Host-->>UI: ack(requestId, error)，随后 render
-        UI->>UI: 保留草稿，解除在途限制
-    end
+    participant User as 文件树
+    participant Host as 扩展适配层
+    participant Core as ReviewService
+    participant Disk as Git 与工作区
+    User->>Host: 点击文件，携带展示时 CR
+    Host->>Host: 记录本次导航序号
+    Host->>Core: openFile(path, session)
+    Core->>Core: 核对活动分支与 CR
+    Core->>Disk: 读取所选文件、基点对象及该路径索引状态
+    Core->>Core: 复查 HEAD、CR 和大小边界
+    Core-->>Host: 当前内容 Pair
+    Host->>Disk: 复核可编辑普通 UTF-8 文件
+    Host->>Host: 丢弃已被后续导航替代的结果
+    Host->>User: 原生 vscode.diff
 ```
 
-`panel.ts` 过滤动作白名单、字段类型及长度；页面以 nonce CSP 加载本地脚本和样式，`localResourceRoots` 为空。评论、代码片段与 Agent 回复使用文本节点展示，不解释为 HTML 或执行指令。
+所选文件来自真实磁盘，不复用旧工作区内容缓存。新合并冲突、子模块、文件读取失败或 CR 已切换会拒绝本次打开。普通 UTF-8 右侧经 `editablePath()` 再校验后使用真实文件 URI，可由编辑器保存；二进制、非 UTF-8、符号链接和纯模式变化使用只读表示。“上次审阅后的变化”仍先完整刷新，再读取保存的已审快照。
 
-`panelAction()` 核对当前 key、CR、目标与评论 ID，修改时携带预期 revision，并向核心传入 `assertCurrent()` 写入 guard。页面检查不能代替核心的锁内归属与版本检查；直接调用底层评论模块也不能省略客户端提供的当前上下文。
+命令和评论消息在接收时绑定导航序号，排队等待不会重新获得后续请求的身份。连续点击采用最后一次导航：旧请求可以结束读取，但不能重新打开旧 Diff、替换当前评论目标或更新操作上下文。目录、待处理概览、评论面板操作、手动标签切换和 CR／仓库命令也使旧打开失效。自身 `vscode.diff` 触发的标签激活与手动切换区分，避免把程序自己的激活当成新导航。原生 Diff 分派期间，预览替换产生的空标签过渡不改变导航序号或评论目标，等待真实标签到达后再同步；此时暂时禁用选区评论上下文。同一标签内的焦点或左右侧事件只更新操作上下文，不覆盖树、目录或概览已选择的评论目标。标签与编辑器事件分开发送时，先按新标签的原始 URI 确认归属，不借用仍指向上一文件的编辑器目标。
 
-保存期间禁用当前草稿编辑与重复提交，普通 render 不解除保存锁。新增评论失败后，未修改正文的重试复用 request ID；成功 ack 仅清理该请求所属、正文仍匹配的草稿，不清空后来切换到的对象。编辑原评论保留 ID/revision，原卡片消失时保留草稿并阻止退化为新增；同一编辑目标的周期 render 不拆卸输入框。
+不同 CR 可能共用真实文件 URI，评论归属以活动 Diff 的不可变原始侧 URI 为准。回切已打开的完整 Diff 时，若其右侧是本工具登记的可编辑文件，评论定位使用当前服务最近成功读取的完整内容；判定不依赖编辑器事件是否已到达。增量与元数据 Diff 保持原快照语义。切到外部或旧 CR 的 Diff 会清除当前评论目标，即使宿主暂未提供活动编辑器。旧 CR 标签可继续查看，不能借共享工作区 URI 给当前 CR 写选区评论。选区还必须来自本工具的完整 Diff、非空，并在保存后核对编辑器文本和磁盘一致。
 
-报错可能发生在评论已写入、派生清单发布失败之后，不能据此推断“什么都没保存”。客户端保留草稿，依靠重新读取和幂等重试确认，恢复规则见[数据协议](../客户端/数据协议.md)。当前 VSIX Webview 没有请求超时或在途请求持久化机制，异常退出后的自动重试仍是缺口。
+读取失败、未保存和仅保留评论的文件不提供普通已审 checkbox。标记动作仍携带展示时的指纹及目录成员，完整扫描后再保存；打开快并不降低标记前的校验。当前没有单独的 Diff 加载动画或取消按钮；真实窗口主题、焦点、键盘与连续点击体验须由目标宿主验证。
 
-## Diff 与导航边界
+## 评论消息与失败确认
 
-完整 Diff 调用原生 `vscode.diff` 并使用预览模式。虚拟文档 URI 绑定仓库、CR、完整／增量视图及左右侧身份，同一语义下复用文件 URI。`repo.editablePath()` 校验通过的普通 UTF-8 工作区文件可作为真实可编辑右侧；其余内容使用只读虚拟文档。
+消息字段以 [`PanelModel` / `PanelMessage`](../../src/panel.ts) 为准。页面通过宿主消息通道发送动作、目标 key、预期 revision 和 request ID；宿主返回 `render` 与对应 `ack`。输入过滤、nonce CSP、空 `localResourceRoots` 及文本节点渲染限制内容执行；评论和回执只是用户数据。
 
-不同 CR 的可编辑右侧可能共用同一个真实文件 URI，因此归属判断使用活动 Diff 标签的原始侧 URI。旧 CR 的固定标签仍可查看，右侧编辑仍修改真实工作区，但不能给当前 CR 绑定代码评论。固定、变脏或预览标记变化不会切走评论草稿；实际切换标签或分组才重新定位对象。
+文件 `Selection.key` 含内容指纹，`draftKey` 对同一仓库、CR 和路径保持稳定；目录和概览使用独立身份。提交消息接收时固定服务、CR、目标和代码锚点；随后打开其他文件不改变已提交评论的归属或把行评论降为文件评论。成功后只清除仍属于该提交的锚点，保留后来选择的锚点。新增评论失败且正文未改时沿用请求 ID 重试；成功 ack 只清理该请求仍匹配的草稿。编辑草稿保留原评论 ID/revision，不能在原卡片消失后悄悄退化为新增。
 
-标记已审时，树生成的 [`MarkRequest`](../../src/tree.ts) 携带展示时 CR、内容指纹及目录文件集合。客户端检查未保存缓冲区，核心再次校验分支、CR、内容和成员；失败后渲染实际状态。选区评论要求本工具完整 Diff、非空选区以及编辑器与磁盘内容一致。定位不唯一时保留原片段并提示确认，不按旧行号猜测。
+保存和清单发布不是跨文件事务，报错时原评论可能已经保存。页面保留草稿，通过重读和幂等重试确认；不得把错误当作“什么都没写入”。当前 Webview 没有请求超时和跨进程在途请求恢复保证。详细恢复入口见[数据协议](数据协议.md#失败处理与恢复)。
 
-待处理概览和目录评论可以打开具体目标并 reveal 到树节点；稳定节点 ID 使普通刷新保留展开状态。按分支接续 CR 与已保存资料已经实现，但选中文件、目录展开和 Diff 定位的跨重启整体恢复未完成验收，不能由数据恢复推导成立。
+## 开发、验证和交付
 
-## 开发、安装与回退
-
-依赖与通用命令见[贡献指南](../../CONTRIBUTING.md)。客户端修改可先编译并运行相关模拟测试：
+沿用 [CONTRIBUTING.md](../../CONTRIBUTING.md) 的工具链。本轮性能回归入口：
 
 ```sh
 npm run compile
-node --test test/panel.test.cjs test/tree.test.cjs test/editor.test.cjs test/editor-context.test.cjs test/editable.test.cjs
+node --test test/vsix-performance.test.cjs test/qa-vsix-performance.test.cjs
+npm test
+npm run package
 ```
 
-代码或打包修改提交前执行 `npm test` 与 `npm run package`；实际执行范围和结果写入[测试](../测试/README.md)。模拟宿主与 DOM 检查状态及消息，原生窗口、快捷键、真实主题和 Remote SSH 另做实机验证。本次是文档核查，没有重跑 VSIX 测试。仓库尚无 `.vscode/launch.json` 或 `tasks.json`，没有现成 F5 配置；当前预览方式是构建 VSIX、安装到获准的测试编辑器并使用合成仓库。
+核心测试使用真实 Git 与临时合成仓库；编辑器测试使用模拟 VS Code API。性能测量从命令触发到树就绪或 `vscode.diff` 调用完成，不能等同于原生 Diff 渲染时间。样本、基线、测量方法和结果由[测试记录](../测试/验证记录.md)集中维护。
 
-[`scripts/package.cjs`](../../scripts/package.cjs) 从 `package.json` 取版本，输出 `artifacts/review-slate-<version>.vsix`；分发内容由 `files` 白名单限定。构建不自动安装或打开编辑器。按[用户指南](../用户文档/使用指南.md)安装重载后，核对版本、四个视图及本次受影响交互；签名、构建成功与目标宿主可用分别记录。
+打包脚本 [`scripts/package.cjs`](../../scripts/package.cjs) 读取包版本，输出 `artifacts/review-slate-<version>.vsix`，内容由 `files` 白名单控制。构建不会安装、启动或发布扩展。VS Code、Trae、Trae CN 与 Remote SSH 是分别验收的目标，不能由一个宿主成功推导其他目标通过。
 
-回退前停止扩展及 Agent 写入，按[数据协议](../客户端/数据协议.md)保留同一时点的两处业务数据。只使用已确认兼容当前格式的 VSIX，安装后核对 CR、固定基点、已审数量及评论归属。存在永久删除标识时，旧于 0.10.0 的客户端不兼容。当前没有逐版本自动回滚或降级验证矩阵，不能靠卸载、清空 JSON 或降级旧客户端恢复数据。
-
-## 本方向的维护边界
-
-客户端行为改变时，同次更新本页和涉及的设计／产品规则，向测试交接真实入口、状态变化与风险。本地接口或存储变化由客户端研发统一核对本地引擎与宿主适配，不在页面另造 schema。新宿主的能力判断与运行方式更新 [Codex 接入](Codex接入.md)；没有目标宿主证据时继续标为未验证，不能由独立测试应用代签验收。
+安装或回退前，停止写入并按[完整备份](数据协议.md#完整备份与容量)保存两处数据。当前改动不升级文件格式或清空进度；回退仍须使用理解现有目录版本和永久删除标识的客户端。测试、安装、目标宿主验收和公开发布各自记录，1.0.2 本地候选不代表已发布。

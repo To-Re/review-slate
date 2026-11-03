@@ -1,7 +1,7 @@
 import { CommentRepository, Notes } from './comments';
 import { Anchor } from './anchors';
 import { CommitChoice, GitRepository } from './git';
-import { absent, checkPath, hash, isNotes, LegacyComparison, messageOf, Pair, pairId, recordId, ReviewBranch, ReviewFile, ReviewRecords, Session } from './model';
+import { absent, checkPath, hash, isNotes, LegacyComparison, messageOf, Pair, pairId, recordId, ReviewBranch, ReviewFile, ReviewRecords, SCAN_LIMIT, Session, snapshotId } from './model';
 import { ReviewState } from './state';
 
 export interface ReviewView { session?: Session; branch?: ReviewBranch; sessions?: Session[]; purgePending?: string[]; baseCommit?: CommitChoice; files: ReviewFile[]; notes: Notes; error?: string }
@@ -13,6 +13,7 @@ export class ReviewService {
   readonly comments: CommentRepository;
   view: ReviewView = { files: [], notes: { comments: [], replies: new Map() } };
   private records: ReviewRecords = Object.create(null);
+  private viewRevision = 0;
   constructor(readonly repo: GitRepository, storage: string) {
     this.state = new ReviewState(storage, repo.root); this.comments = new CommentRepository(repo.root);
   }
@@ -29,42 +30,54 @@ export class ReviewService {
     await this.refresh();
   }
   async refresh(): Promise<void> {
-    try {
-      const branch = await this.repo.branch(), session = await this.state.active(branch), sessions = await this.state.sessions();
-      const purgePending = await this.state.pendingPurges();
-      const notes = await this.comments.sync(session, sessions.filter(item => !purgePending.includes(item.id)), async () => {
-        if ((await this.repo.branch()).key !== branch.key || JSON.stringify(await this.state.sessions()) !== JSON.stringify(sessions)) {
-          throw new Error('分支或 CR 记录已改变，请刷新后继续');
+    for (;;) {
+      const revision = this.viewRevision;
+      try {
+        const branch = await this.repo.branch(), session = await this.state.active(branch), sessions = await this.state.sessions();
+        const purgePending = await this.state.pendingPurges();
+        const notes = await this.comments.sync(session, sessions.filter(item => !purgePending.includes(item.id)), async () => {
+          if ((await this.repo.branch()).key !== branch.key || JSON.stringify(await this.state.sessions()) !== JSON.stringify(sessions)) {
+            throw new Error('分支或 CR 记录已改变，请刷新后继续');
+          }
+        });
+        if (!session) {
+          if (revision !== this.viewRevision) continue;
+          this.records = Object.create(null); this.view = { branch, sessions, purgePending, files: [], notes };
+          this.viewRevision++; return;
         }
-      });
-      if (!session) { this.records = Object.create(null); this.view = { branch, sessions, purgePending, files: [], notes }; return; }
-      const records = await this.state.records(session);
-      const files = await this.repo.scan(session.base, Object.keys(records));
-      for (const file of files) {
-        const record = Object.hasOwn(records, file.path) ? records[file.path] : undefined;
-        if (!file.error && record) file.status = file.fingerprint === recordId(record) ? 'reviewed' : 'changed';
-      }
-      const visible = new Set(files.map(file => file.path));
-      const activePaths = new Set(notes.comments.filter(comment => comment.target !== 'directory').map(comment => comment.path));
-      for (const comment of [...notes.comments, ...(notes.deleted || [])]) {
-        if (comment.target === 'directory') continue;
-        if (visible.has(comment.path)) continue;
-        visible.add(comment.path);
-        try {
-          const pair = await this.repo.pair(session.base, comment.path);
-          files.push({ path: comment.path, ...pair, fingerprint: pairId(pair), status: 'pending', commentOnly: true, deletedOnly: !activePaths.has(comment.path) });
-        } catch (error) {
-          files.push({ path: comment.path, left: absent(), right: absent(), fingerprint: '', status: 'pending', commentOnly: true, error: messageOf(error) });
+        const records = await this.state.records(session);
+        const files = await this.repo.scan(session.base, Object.keys(records));
+        for (const file of files) {
+          const record = Object.hasOwn(records, file.path) ? records[file.path] : undefined;
+          if (!file.error && record) file.status = file.fingerprint === recordId(record) ? 'reviewed' : 'changed';
         }
+        const visible = new Set(files.map(file => file.path));
+        const activePaths = new Set(notes.comments.filter(comment => comment.target !== 'directory').map(comment => comment.path));
+        for (const comment of [...notes.comments, ...(notes.deleted || [])]) {
+          if (comment.target === 'directory') continue;
+          if (visible.has(comment.path)) continue;
+          visible.add(comment.path);
+          try {
+            const pair = await this.repo.pair(session.base, comment.path);
+            files.push({ path: comment.path, ...pair, fingerprint: pairId(pair), status: 'pending', commentOnly: true, deletedOnly: !activePaths.has(comment.path) });
+          } catch (error) {
+            files.push({ path: comment.path, left: absent(), right: absent(), fingerprint: '', status: 'pending', commentOnly: true, error: messageOf(error) });
+          }
+        }
+        files.sort((a, b) => a.path.localeCompare(b.path));
+        const baseCommit = await this.repo.commitInfo(session.base);
+        await this.assertCurrent(session);
+        // A targeted read published while this scan was running. Repeat the complete
+        // refresh rather than overwrite it or present a mixture as a fresh full scan.
+        if (revision !== this.viewRevision) continue;
+        this.records = records;
+        this.view = { session, branch, sessions, purgePending, baseCommit, files, notes };
+        this.viewRevision++; return;
+      } catch (error) {
+        if (revision !== this.viewRevision) continue;
+        this.view = { ...this.view, files: [], error: messageOf(error) };
+        this.viewRevision++; throw error;
       }
-      files.sort((a, b) => a.path.localeCompare(b.path));
-      this.records = records;
-      const baseCommit = await this.repo.commitInfo(session.base);
-      await this.assertCurrent(session);
-      this.view = { session, branch, sessions, purgePending, baseCommit, files, notes };
-    } catch (error) {
-      this.view = { ...this.view, files: [], error: messageOf(error) };
-      throw error;
     }
   }
   selection(file: string): Selection {
@@ -96,7 +109,48 @@ export class ReviewService {
   async capture(file: string): Promise<Selection> {
     const session = this.view.session;
     if (this.view.error || !session) throw new Error('请先成功刷新并选择基点');
-    return this.makeSelection(file, await this.repo.pair(session.base, file), session);
+    await this.assertCurrent(session);
+    const head = await this.repo.resolve('HEAD'), pair = await this.repo.pair(session.base, file);
+    if (head !== await this.repo.resolve('HEAD')) throw new Error('读取时分支发生变化，请刷新');
+    await this.assertCurrent(session);
+    if (this.view.error || this.view.session?.id !== session.id) throw new Error('审阅视图已改变，请刷新后重新打开');
+    return this.makeSelection(file, pair, session);
+  }
+  /** Refresh the clicked file from disk without claiming that the rest of the tree was rescanned. */
+  async openFile(file: string, expectedSession?: string, current: () => boolean = () => true): Promise<Selection | undefined> {
+    const previous = this.selection(file);
+    if (expectedSession && expectedSession !== previous.session.id) throw new Error('CR 已改变，请从当前文件树重新打开 Diff');
+    while (current()) {
+      const revision = this.viewRevision;
+      try {
+        if (this.view.session?.id !== previous.session.id) throw new Error('CR 已改变，请从当前文件树重新打开 Diff');
+        const selected = await this.capture(file);
+        if (!current()) return;
+        // A newer complete/targeted read won publication; this target must be read again.
+        if (revision !== this.viewRevision) continue;
+        const fingerprint = pairId(selected.pair);
+        const record = Object.hasOwn(this.records, file) ? this.records[file] : undefined;
+        const changed = snapshotId(selected.pair.left) !== snapshotId(selected.pair.right);
+        const activeComment = this.view.notes.comments.some(comment => comment.target !== 'directory' && comment.path === file);
+        const retained = activeComment || this.view.notes.deleted?.some(comment => comment.target !== 'directory' && comment.path === file);
+        const size = this.view.files.reduce((total, row) => total + (row.path === file || row.commentOnly || row.error ? 0 : row.left.data.length + row.right.data.length), 0) +
+          (changed ? selected.pair.left.data.length + selected.pair.right.data.length : 0);
+        if (size > SCAN_LIMIT) throw new Error('本次差异超过 80 MiB，请选择更近的基点');
+        const files = this.view.files.filter(row => row.path !== file);
+        if (changed || retained) files.push({ path: file, ...selected.pair, fingerprint, commentOnly: !changed, deletedOnly: !changed && !activeComment,
+          status: record ? (fingerprint === recordId(record) ? 'reviewed' : 'changed') : 'pending' });
+        this.view.files = files.sort((a, b) => a.path.localeCompare(b.path));
+        this.viewRevision++; return selected;
+      } catch (error) {
+        if (!current()) return;
+        if (revision !== this.viewRevision) continue;
+        if (this.view.session?.id === previous.session.id) {
+          this.view.files = this.view.files.map(row => row.path === file ? { ...row, error: messageOf(error) } : row);
+          this.viewRevision++;
+        }
+        throw error;
+      }
+    }
   }
   async mark(request: MarkRequest, beforeWrite?: () => void): Promise<void> {
     await this.refresh();

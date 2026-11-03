@@ -2,7 +2,7 @@
   "name": "code-review",
   "displayName": "ReviewSlate",
   "description": "在编辑器里审阅文件变更、留下批注并交给 Agent 处理。固定基点，保存进度，无需服务器。",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "publisher": "to-re",
   "license": "MIT",
   "engines": {
