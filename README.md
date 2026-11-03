@@ -25,7 +25,7 @@ ReviewSlate is a local review and annotation extension for VS Code, Trae, and Tr
 | Trae | 提供 VS Code API 1.107.0 或更高兼容版本的桌面版 |
 | Trae CN | 提供 VS Code API 1.107.0 或更高兼容版本的桌面版 |
 
-Trae 与 Trae CN 的产品版本号不等于 VS Code 内核版本号。以上是扩展的兼容目标；不同宿主的菜单和远程安装方式可能不同。1.0.1 已在 macOS 的 Trae CN 3.4.11（内核 1.107.1）验证 VSIX 安装、窗口重载、审阅设置、新建入口、SHA 输入与 Git 图形菜单显示。完整流程由合成仓库自动化回归覆盖；VS Code、Trae 和 Remote SSH 尚未完成本版本实机验证。
+Trae 与 Trae CN 的产品版本号不等于 VS Code 内核版本号。以上是扩展的兼容目标；不同宿主的菜单和远程安装方式可能不同。1.0.1 已在 macOS 的 Trae CN 3.4.11（内核 1.107.1）验证 VSIX 安装、窗口重载、审阅设置、新建入口、SHA 输入与 Git 图形菜单显示。核心行为有合成仓库自动化回归；VS Code、Trae 和 Remote SSH 尚未完成本版本实机验证。验证范围见[项目文档](docs/README.md#发布与验证边界)。
 
 1. 从 [GitHub Releases](https://github.com/To-Re/review-slate/releases) 下载 `review-slate-1.0.1.vsix`，或按[贡献指南](CONTRIBUTING.md)从源码打包。
 2. 在编辑器扩展面板的更多菜单中选择 **Install from VSIX… / 从 VSIX 安装…**，选择该文件。
@@ -45,13 +45,13 @@ Trae 与 Trae CN 的产品版本号不等于 VS Code 内核版本号。以上是
 
 “交给 Agent”只复制文字，不会调用或启动 Agent。交接说明和生成清单包含**仓库及目标文件的绝对路径**，选区评论还含原代码片段；粘贴到外部服务或分享前，请检查内容及接收方的访问范围。远程工作区中的路径属于远端文件系统。
 
-更多操作见[使用指南](docs/usage.md)，未来的 Codex 与 DeepSeek Harness 集成见[路线图](docs/roadmap.md)。
+更多操作见[使用指南](docs/usage.md)。当前版本提供 VS Code 系扩展和文件交接；后续优先开发 Codex 集成，范围与完成条件见[路线图](docs/roadmap.md)。
 
 ## 数据与限制
 
 审阅记录、默认基点和内容快照保存在宿主提供的扩展存储中；已保存评论、回执和交接清单保存在仓库根目录 `.code-review/`。首次保存评论或接续已有评论时，扩展会向根 `.gitignore` 补充 `/.code-review/`，保留已有规则。已被 Git 跟踪的文件不会因加入忽略规则而取消跟踪。
 
-备份需要同时保留这两处数据。它们不会自动跨机器或编辑器同步，移动仓库目录也不会自动迁移审阅记录。单条评论“删除”可撤销；CR“归档”可恢复；“永久删除”会清理该 CR 的保存数据，不能恢复。具体布局、备份与恢复边界见[数据与架构](docs/data.md)。
+备份需要同时保留这两处数据。它们不会自动跨机器或编辑器同步，移动仓库目录也不会自动迁移审阅记录。单条评论“删除”可撤销；CR“归档”可恢复；“永久删除”会清理该 CR 的保存数据，不能恢复。只复制 `.code-review/` 不能恢复已审进度。具体布局、备份与恢复边界见[数据协议](docs/data.md)。
 
 - 单侧变化文件大小上限为 5 MiB；一次扫描中变化文件两侧内容累计上限为 80 MiB。未变化的大文件可校验后跳过。
 - 二进制和非 UTF-8 内容显示摘要；符号链接只读取链接文本；子模块需单独打开为仓库审阅。
@@ -60,6 +60,6 @@ Trae 与 Trae CN 的产品版本号不等于 VS Code 内核版本号。以上是
 
 ## 参与项目
 
-使用问题与功能建议可提交 [Issue](https://github.com/To-Re/review-slate/issues)。开发、测试与提交要求见 [CONTRIBUTING.md](CONTRIBUTING.md)，安全问题见 [SECURITY.md](SECURITY.md)，其他文档见[文档索引](docs/README.md)。
+使用问题与功能建议可提交 [Issue](https://github.com/To-Re/review-slate/issues)。开发、验收与提交要求见 [CONTRIBUTING.md](CONTRIBUTING.md)，产品规则、架构和 Codex 设计从[文档索引](docs/README.md)进入；安全问题见 [SECURITY.md](SECURITY.md)。
 
 项目使用 [MIT License](LICENSE)。感谢 [Incremental Diff](https://github.com/statiolake/vscode-incremental-diff) 对固定基点、内容快照和增量审阅思路的启发。ReviewSlate 独立实现，未复制其源码或测试。
