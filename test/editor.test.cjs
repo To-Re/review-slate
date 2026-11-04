@@ -45,7 +45,8 @@ test('编辑器适配：入口、两种基点、通知不阻塞、原生 Diff、
   let activate; try { ({ activate } = require('../dist/extension')); } finally { Module._load = previous; }
   const context = { extensionPath: path.resolve(__dirname, '..'), extensionMode: 3, subscriptions: [], globalStorageUri: { fsPath: f.storage }, globalState: memory(), workspaceState: memory() };
   let app = activate(context); t.after(() => app.dispose()); await app.ready;
-  assert.equal(app.tree.nodes.length, 0); assert.equal(view.message, undefined); assert.equal(commands.size, 23);
+  assert.equal(app.tree.nodes.length, 0); assert.equal(view.message, undefined); assert.equal(commands.size, 25);
+  assert.ok(commands.has('codeReview.filter')); assert.ok(commands.has('codeReview.clearFilter'));
   assert.equal(app.history.getTreeItem(app.history.getChildren()[0]).command.command, 'codeReview.newReview');
   assert.equal(app.settings.nodes[0].description, path.basename(f.root));
   let menus = 0;

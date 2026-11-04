@@ -2,7 +2,7 @@
   "name": "code-review",
   "displayName": "ReviewSlate",
   "description": "在编辑器里审阅文件变更、留下批注并交给 Agent 处理。固定基点，保存进度，无需服务器。",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "publisher": "to-re",
   "license": "MIT",
   "engines": {
@@ -179,6 +179,16 @@
         "command": "codeReview.fromCommit",
         "title": "ReviewSlate：以此提交为基点新建审阅",
         "icon": "$(git-commit)"
+      },
+      {
+        "command": "codeReview.filter",
+        "title": "ReviewSlate：筛选变更文件",
+        "icon": "$(filter)"
+      },
+      {
+        "command": "codeReview.clearFilter",
+        "title": "ReviewSlate：显示全部",
+        "icon": "$(clear-all)"
       }
     ],
     "menus": {
@@ -217,17 +227,27 @@
           "command": "codeReview.newFromCommit",
           "when": "view == codeReview.reviews",
           "group": "review@1"
+        },
+        {
+          "command": "codeReview.filter",
+          "when": "view == codeReview.files",
+          "group": "navigation@1"
+        },
+        {
+          "command": "codeReview.clearFilter",
+          "when": "view == codeReview.files && codeReview.treeFiltered",
+          "group": "navigation@1.5"
         }
       ],
       "view/item/context": [
         {
           "command": "codeReview.mark",
-          "when": "view == codeReview.files && viewItem =~ /^review/",
+          "when": "view == codeReview.files && (viewItem == reviewFile || (viewItem == reviewDirectory && !codeReview.treeFiltered))",
           "group": "inline@1"
         },
         {
           "command": "codeReview.unmark",
-          "when": "view == codeReview.files && viewItem =~ /^review/",
+          "when": "view == codeReview.files && (viewItem == reviewFile || (viewItem == reviewDirectory && !codeReview.treeFiltered))",
           "group": "review@2"
         },
         {

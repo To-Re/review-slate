@@ -1,10 +1,12 @@
 # ReviewSlate 文档
 
-负责人：主负责人；状态：现行；最后核查：2026-11-03。本文适用于 `main` 的 VS Code 系 VSIX 扩展，依据本分支实现与各角色的独立核查维护。
+负责人：主负责人；状态：现行；最后核查：2026-11-04。本文适用于 `main` 的 VS Code 系 VSIX 扩展，依据本分支实现与各角色的独立核查维护。
 
 用户从[使用指南](用户文档/使用指南.md)开始；维护者先读[项目现状](项目现状.md)和[在途状态](项目状态.md)。参与开发前阅读 [CONTRIBUTING.md](../CONTRIBUTING.md)、[AGENTS.md](../AGENTS.md)和[协作规范](协作规范.md)。
 
 `main` 只维护 VSIX，兼容目标包括 VS Code、Trae 和 Trae CN。Codex 的开发源码与文档在 [beta 分支](https://github.com/To-Re/review-slate/tree/beta)，不属于本分支的交付范围。
+
+本分支版本为 1.0.3，新增变更树筛选；安装入口见 [1.0.3 Release](https://github.com/To-Re/review-slate/releases/tag/v1.0.3)，验证范围与后续工作见[项目状态](项目状态.md)。
 
 ## 按角色查阅
 

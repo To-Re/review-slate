@@ -172,7 +172,7 @@ export class ReviewService {
     }
     beforeWrite?.();
     await this.assertCurrent(session);
-    await this.state.record(session, updates, () => this.assertCurrent(session));
+    await this.state.record(session, updates, async () => { await this.assertCurrent(session); beforeWrite?.(); });
     await this.refresh();
   }
   async previous(file: string): Promise<Pair | undefined> {

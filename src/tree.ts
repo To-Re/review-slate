@@ -2,6 +2,10 @@ import * as vscode from 'vscode';
 import { ReviewFile } from './model';
 import { MarkRequest, ReviewView } from './review';
 
+export type TreeFilter = 'all' | 'unreviewed' | 'comments';
+export const treeFilterLabels: Record<TreeFilter, string> = { all: '全部', unreviewed: '未审核', comments: '有评论' };
+export function treeFilter(value: unknown): TreeFilter { return value === 'unreviewed' || value === 'comments' ? value : 'all'; }
+
 export interface TreeNode {
   kind: 'base' | 'file' | 'folder' | 'message';
   id: string; label: string; path?: string; row?: ReviewFile; children?: TreeNode[];
@@ -47,10 +51,14 @@ export class ReviewTree implements vscode.TreeDataProvider<TreeNode>, vscode.Fil
   private readonly comments = new Map<string, CommentCounts>();
   private readonly directoryComments = new Map<string, DirectoryCommentCounts>();
   private readonly nodeIndex = new Map<string, TreeNode>();
+  private readonly allNodeIndex = new Map<string, TreeNode>();
+  private filter: TreeFilter = 'all';
   private session?: string;
-  render(view: ReviewView, dirty = new Set<string>()): void {
+  render(view: ReviewView, dirty = new Set<string>(), filter: TreeFilter = 'all'): void {
     this.session = view.session?.id;
+    this.filter = filter;
     this.dirty = dirty;
+    this.allNodeIndex.clear();
     this.decorations.clear();
     this.comments.clear(); this.directoryComments.clear();
     for (const comment of view.notes.comments) {
@@ -116,17 +124,39 @@ export class ReviewTree implements vscode.TreeDataProvider<TreeNode>, vscode.Fil
         ...(root.children!.length ? root.children! : [{ kind: 'message' as const, id: 'empty', label: '与基点相比没有改动' }])
       ];
     }
-    this.nodeIndex.clear();
-    const remaining = [...this.nodes].reverse();
-    while (remaining.length) {
-      const node = remaining.pop()!;
-      this.nodeIndex.set(node.id, node);
-      if (node.children) remaining.push(...[...node.children].reverse());
+    const index = (nodes: TreeNode[], target: Map<string, TreeNode>): void => {
+      target.clear();
+      const remaining = [...nodes].reverse();
+      while (remaining.length) {
+        const node = remaining.pop()!;
+        target.set(node.id, node);
+        if (node.children) remaining.push(...[...node.children].reverse());
+      }
+    };
+    index(this.nodes, this.allNodeIndex);
+    if (filter !== 'all' && view.session && !view.error) {
+      const visible = (node: TreeNode): TreeNode[] => {
+        if (node.kind === 'base') return [node];
+        if (node.row) {
+          const row = node.row;
+          const matches = filter === 'comments' ? this.comments.has('file:' + row.path) :
+            !row.commentOnly && (row.status !== 'reviewed' || !!row.error || dirty.has(row.path));
+          return matches ? [node] : [];
+        }
+        const children = (node.children || []).flatMap(visible);
+        return children.length || (filter === 'comments' && this.comments.has('directory:' + node.path)) ? [{ ...node, children }] : [];
+      };
+      this.nodes = this.nodes.flatMap(visible);
+      if (!this.nodes.some(node => node.kind === 'file' || node.kind === 'folder')) this.nodes.push({
+        kind: 'message', id: 'filter-empty', label: filter === 'unreviewed' ? '没有未审核文件' : '暂无带评论的文件或目录', tooltip: '点击显示全部'
+      });
     }
+    index(this.nodes, this.nodeIndex);
     this.changed.fire(); this.decorationsChanged.fire(undefined);
   }
   private directoryDetails(node: TreeNode) {
-    const rows = filesIn(node), total = rows.length;
+    const completeNode = this.allNodeIndex.get(node.id);
+    const rows = filesIn(completeNode && completeNode.session === node.session ? completeNode : node), total = rows.length;
     const reviewed = rows.filter(row => row.status === 'reviewed' && !row.error && !this.dirty.has(row.path)).length;
     const failed = rows.some(row => row.error), unsaved = rows.some(row => this.dirty.has(row.path));
     const complete = total > 0 && reviewed === total;
@@ -140,11 +170,15 @@ export class ReviewTree implements vscode.TreeDataProvider<TreeNode>, vscode.Fil
     const badge = failed ? '!' : complete ? '✓' : reviewed ? '◐' : undefined;
     const action = complete ? '点击取消此目录的已审标记' : reviewed ? '部分文件已审，点击标记整个目录为已审' : '点击标记整个目录为已审';
     return { total, complete, failed, unsaved, description, color, badge, action,
-      tooltip: (node.path || node.label) + '\n' + description + commentTooltip + '\n点击目录名称查看本目录与子项评论，箭头展开子目录。' + (failed ? '\n存在读取失败，不能标记已审' : unsaved ? '\n存在未保存修改，保存后才能标记已审' : total ? '\n' + action : '') };
+      tooltip: (node.path || node.label) + '\n' + description + commentTooltip + '\n点击目录名称查看本目录与子项评论，箭头展开子目录。' +
+        (this.filter !== 'all' ? '\n进度与评论数包含隐藏项；筛选时请切换到全部后批量标记' : failed ? '\n存在读取失败，不能标记已审' : unsaved ? '\n存在未保存修改，保存后才能标记已审' : total ? '\n' + action : '') };
   }
-  getChildren(node?: TreeNode): TreeNode[] { return node ? node.children || [] : this.nodes; }
-  findTarget(path: string, target?: 'directory'): TreeNode | undefined {
-    const node = this.nodeIndex.get((target === 'directory' ? 'dir:' : 'file:') + path);
+  getChildren(node?: TreeNode): TreeNode[] {
+    if (!node) return this.nodes;
+    return node.session === this.session ? this.nodeIndex.get(node.id)?.children || [] : [];
+  }
+  findTarget(path: string, target?: 'directory', includeHidden = false): TreeNode | undefined {
+    const node = (includeHidden ? this.allNodeIndex : this.nodeIndex).get((target === 'directory' ? 'dir:' : 'file:') + path);
     return node?.session === this.session ? node : undefined;
   }
   getParent(node: TreeNode): TreeNode | undefined {
@@ -187,7 +221,7 @@ export class ReviewTree implements vscode.TreeDataProvider<TreeNode>, vscode.Fil
       item.resourceUri = resource((node.path || '') + '/', node.session || 'files');
       item.iconPath = new vscode.ThemeIcon('folder', new vscode.ThemeColor('codeReview.' + details.color + 'Foreground'));
       item.accessibilityInformation = { label: node.label + '，' + details.description };
-      if (details.total && !details.failed && !details.unsaved) item.checkboxState = {
+      if (this.filter === 'all' && details.total && !details.failed && !details.unsaved) item.checkboxState = {
         state: details.complete ? vscode.TreeItemCheckboxState.Checked : vscode.TreeItemCheckboxState.Unchecked,
         tooltip: details.action,
         accessibilityInformation: { label: details.description + '，' + details.action }
@@ -204,6 +238,8 @@ export class ReviewTree implements vscode.TreeDataProvider<TreeNode>, vscode.Fil
       if (!row.error && !row.commentOnly && !dirty) item.checkboxState = row.status === 'reviewed' ? vscode.TreeItemCheckboxState.Checked : vscode.TreeItemCheckboxState.Unchecked;
       item.accessibilityInformation = { label: node.label + '，' + change + '，' + label + (test ? '，测试文件' : '') + (comment ? '，' + comment : '') };
       item.command = { command: 'codeReview.open', title: '打开 Diff 与评论', arguments: [node] };
+    } else if (node.id === 'filter-empty') {
+      item.command = { command: 'codeReview.clearFilter', title: '显示全部' };
     } else if (node.retry) {
       item.iconPath = new vscode.ThemeIcon('error');
       item.command = { command: 'codeReview.refresh', title: '重试' };

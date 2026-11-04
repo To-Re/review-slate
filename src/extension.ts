@@ -11,7 +11,7 @@ import { decode, hash, isCommit, isNotes, LegacyComparison, messageOf, Pair, sna
 import { CommentPanel, PanelMessage } from './panel';
 import { ReviewService, Selection } from './review';
 import { ReviewSettings, SettingNode } from './settings';
-import { filesIn, markRequest, ReviewTree, TreeNode } from './tree';
+import { filesIn, markRequest, ReviewTree, treeFilter, TreeFilter, treeFilterLabels, TreeNode } from './tree';
 
 interface DocumentData { selection: Selection; side: 'left' | 'right'; text: string; full: boolean; root: string; live?: boolean }
 type CurrentNavigation = () => boolean;
@@ -37,6 +37,8 @@ export class ReviewExtension implements vscode.Disposable {
   private anchor?: Anchor;
   private renderedDirty = '';
   private tail: Promise<void> = Promise.resolve();
+  private filterTail: Promise<void> = Promise.resolve();
+  private filter: TreeFilter;
   private pending = 0;
   private queuedRefresh?: { promise: Promise<void>; notify: boolean };
   private navigation = 0;
@@ -49,6 +51,7 @@ export class ReviewExtension implements vscode.Disposable {
   private readonly timer: ReturnType<typeof setInterval>;
   readonly ready: Promise<void>;
   constructor(private readonly context: vscode.ExtensionContext) {
+    this.filter = treeFilter(context.workspaceState.get('treeFilter'));
     this.panel = new CommentPanel(context.extensionPath, message => {
       this.navigation++;
       const captured = this.panelContext();
@@ -71,7 +74,7 @@ export class ReviewExtension implements vscode.Disposable {
           return entry.text;
         }
       }));
-    const commands: Record<string, (node: TreeNode | undefined, current: CurrentNavigation) => Promise<void>> = {
+    const commands: Record<string, (node: TreeNode | undefined, current: CurrentNavigation, allowBatch: boolean) => Promise<void>> = {
       configure: () => this.configure(), defaultBase: () => this.configure(true), repository: () => this.selectRepository(true),
       newReview: () => this.configure(false, true),
       newFromCommit: () => this.newFromCommit(),
@@ -81,7 +84,7 @@ export class ReviewExtension implements vscode.Disposable {
       refresh: () => this.refresh(), open: (node, current) => this.open(node, false, current), comment: (node, current) => this.open(node, false, current),
       commentDirectory: (node, current) => this.openDirectory(node, current),
       since: (node, current) => this.open(node, true, current),
-      mark: node => this.mark(node, true), unmark: node => this.mark(node, false),
+      mark: (node, _current, allowBatch) => this.mark(node, true, allowBatch), unmark: (node, _current, allowBatch) => this.mark(node, false, allowBatch),
       commentSelection: (_node, current) => this.selectCode(current), handoff: () => this.handoff(), pending: (_node, current) => this.showPending(current)
     };
     for (const [name, handler] of Object.entries(commands)) {
@@ -89,9 +92,14 @@ export class ReviewExtension implements vscode.Disposable {
         if ((name === 'open' || name === 'comment') && node?.path && node.kind !== 'folder') return this.openImmediate(node);
         if (name === 'refresh') return this.requestRefresh(true);
         this.navigation++;
-        const current = this.navigationGuard();
-        return this.enqueue(() => handler(node, current));
+        const current = this.navigationGuard(), allowBatch = this.filter === 'all';
+        return this.enqueue(() => handler(node, current, allowBatch));
       }));
+    }
+    for (const [name, action] of Object.entries({ filter: () => this.chooseTreeFilter(), clearFilter: () => this.setTreeFilter('all') })) {
+      this.listeners.push(vscode.commands.registerCommand('codeReview.' + name, () => action().catch(error => {
+        void vscode.window.showErrorMessage('ReviewSlate：' + messageOf(error));
+      })));
     }
     this.listeners.push(vscode.commands.registerCommand('codeReview.fromCommit', (sourceControl: unknown, commit: unknown) =>
       { this.navigation++; return this.enqueue(() => this.fromCommit(sourceControl, commit)); }));
@@ -106,10 +114,11 @@ export class ReviewExtension implements vscode.Disposable {
       }); }));
     }
     this.listeners.push(this.view.onDidChangeCheckboxState(event => {
+      const allowBatch = this.filter === 'all';
       void this.enqueue(async () => {
         const folders = event.items.filter(([node]) => node.kind === 'folder');
         const items = event.items.filter(([node]) => !folders.some(([folder]) => node !== folder && node.path?.startsWith((folder.path || '') + '/')));
-        for (const [node, state] of items) await this.mark(node, state === vscode.TreeItemCheckboxState.Checked);
+        for (const [node, state] of items) await this.mark(node, state === vscode.TreeItemCheckboxState.Checked, allowBatch);
       });
     }));
     this.listeners.push(this.view.onDidChangeVisibility(event => { if (event.visible && !this.pending) void this.requestRefresh(); }));
@@ -131,9 +140,45 @@ export class ReviewExtension implements vscode.Disposable {
     this.ready = this.enqueue(() => this.selectRepository(false), false);
   }
   async whenIdle(): Promise<void> {
-    let tail: Promise<void>;
-    do { tail = this.tail; await Promise.all([tail, ...this.openings]); }
-    while (tail !== this.tail || this.openings.size);
+    let tail: Promise<void>, filterTail: Promise<void>;
+    do { tail = this.tail; filterTail = this.filterTail; await Promise.all([tail, filterTail, ...this.openings]); }
+    while (tail !== this.tail || filterTail !== this.filterTail || this.openings.size);
+  }
+  private async chooseTreeFilter(): Promise<void> {
+    const choice = await vscode.window.showQuickPick((['all', 'unreviewed', 'comments'] as const).map(filter => ({
+      label: treeFilterLabels[filter], description: this.filter === filter ? '当前' : undefined, filter
+    })), { title: '筛选变更文件', placeHolder: '仅筛选已加载的文件树，进度与评论数仍统计全部范围' });
+    if (choice) await this.setTreeFilter(choice.filter);
+  }
+  private setTreeFilter(filter: TreeFilter, current: CurrentNavigation = () => true): Promise<boolean> {
+    // Preference writes are ordered separately from Git work and do not invalidate navigation.
+    const task = this.filterTail.then(async () => {
+      if (this.disposed || !current() || this.filter === filter) return false;
+      const previous = this.filter;
+      await this.context.workspaceState.update('treeFilter', filter);
+      if (!current()) {
+        // A newer navigation superseded an automatic reveal while persistence was
+        // pending. Restore its preference before any later manual filter is applied.
+        await this.context.workspaceState.update('treeFilter', previous);
+        return false;
+      }
+      if (this.disposed) return false;
+      this.filter = filter; this.render(); return true;
+    });
+    this.filterTail = task.then(() => {}, () => {});
+    return task;
+  }
+  private async visibleCommentTarget(file: string, target: 'directory' | undefined, service: ReviewService, session: string, current: CurrentNavigation): Promise<TreeNode | undefined> {
+    const valid = (): boolean => current() && service === this.service && service.view.session?.id === session;
+    if (!valid()) return;
+    this.render();
+    if (!this.tree.findTarget(file, target) && this.filter !== 'all' && this.tree.findTarget(file, target, true)) {
+      const cleared = await this.setTreeFilter('all', () => valid() && this.filter !== 'all' &&
+        !this.tree.findTarget(file, target) && !!this.tree.findTarget(file, target, true));
+      if (!valid()) return;
+      if (cleared) void vscode.window.showInformationMessage('已显示全部，以定位评论对象');
+    }
+    return this.tree.findTarget(file, target);
   }
   private navigationGuard(): CurrentNavigation {
     const navigation = this.navigation;
@@ -415,24 +460,26 @@ export class ReviewExtension implements vscode.Disposable {
   private render(error?: string): void {
     const active = vscode.window.activeTextEditor;
     void vscode.commands.executeCommand('setContext', 'codeReview.commentable', !!(active && this.entryFor(active.document.uri)?.full));
+    void vscode.commands.executeCommand('setContext', 'codeReview.treeFiltered', this.filter !== 'all');
     const service = this.service;
     const dirty = this.dirtyFiles();
     this.renderedDirty = JSON.stringify([...dirty].sort());
     if (!service) {
       this.settings.render();
-      this.tree.render({ files: [], notes: { comments: [], replies: new Map() } });
+      this.tree.render({ files: [], notes: { comments: [], replies: new Map() } }, dirty, this.filter);
       this.history.render({ files: [], notes: { comments: [], replies: new Map() } });
       this.historyView.description = undefined;
       this.view.description = undefined; this.view.badge = undefined;
       this.renderPanel(error); return;
     }
     const data = service.view;
-    this.tree.render(data, dirty);
+    this.tree.render(data, dirty, this.filter);
     this.history.render(data);
     this.historyView.description = data.branch?.label;
     this.view.description = path.basename(service.repo.root) + (data.branch ? ' · ' + data.branch.label : '');
     const changes = data.files.filter(file => !file.commentOnly), reviewed = changes.filter(file => file.status === 'reviewed' && !file.error && !dirty.has(file.path)).length;
-    this.view.message = data.error ? '读取失败，已有数据保留' : data.session ? reviewed + '/' + changes.length + ' 已审 · 保存后的工作区' : undefined;
+    const status = data.error ? '读取失败，已有数据保留' : data.session ? (this.filter === 'all' ? '' : '全部范围 ') + reviewed + '/' + changes.length + ' 已审 · 保存后的工作区' : undefined;
+    this.view.message = this.filter === 'all' ? status : '筛选：' + treeFilterLabels[this.filter] + (status ? ' · ' + status : '');
     this.view.badge = !data.error && changes.length > reviewed ? { value: changes.length - reviewed, tooltip: '待审文件' } : undefined;
     this.renderPanel(error);
   }
@@ -479,13 +526,19 @@ export class ReviewExtension implements vscode.Disposable {
       })
     });
   }
-  private async mark(node: TreeNode | undefined, checked: boolean): Promise<void> {
+  private async mark(node: TreeNode | undefined, checked: boolean, allowBatch = this.filter === 'all'): Promise<void> {
     const service = this.service;
     if (!service?.view.session) throw new Error('请先选择基点');
+    const batch = !node || node.kind === 'folder';
+    const checkFilter = (): void => {
+      if (batch && (!allowBatch || this.filter !== 'all')) throw new Error('筛选时请切换到全部后批量标记');
+    };
+    checkFilter();
     const root: TreeNode = node || { kind: 'folder', id: 'root', label: '', path: '', session: service.view.session.id, children: this.tree.nodes };
     if (!filesIn(root).length) return;
     const request = markRequest(root, checked);
     const guard = (): void => {
+      checkFilter();
       if (!checked) return;
       const dirty = [...this.dirtyFiles()].find(file => request.directory !== undefined ? (!request.directory || file.startsWith(request.directory + '/')) : request.files.some(item => item.path === file));
       if (dirty) throw new Error(dirty + ' 有未保存修改，请先保存并查看最新 Diff，再标记已审');
@@ -600,7 +653,8 @@ export class ReviewExtension implements vscode.Disposable {
       const comment = service.view.notes.comments.find(item => message.id ? item.id === message.id : sameTarget(item, message.path, message.target));
       if (!comment || (!overview && (selected?.target !== 'directory' || !comment.path.startsWith(selected.file + '/')))) throw new Error('该评论位置已变化，请刷新后重试');
       const target = comment.target === 'directory' ? 'directory' : undefined;
-      const node = this.tree.findTarget(comment.path, target);
+      const node = await this.visibleCommentTarget(comment.path, target, service, session.id, current);
+      if (!current() || service !== this.service) return;
       if (!node || node.session !== session.id) throw new Error('该评论位置已变化，请刷新后重试');
       if (comment.target === 'directory') await this.openDirectory(node, current); else await this.open(node, false, current);
       const targetNode = this.tree.findTarget(comment.path, target);
@@ -633,6 +687,10 @@ export class ReviewExtension implements vscode.Disposable {
       const row = service.view.files.find(file => file.path === comment.path);
       const position = locate(comment.anchor, row?.error ? undefined : row);
       if (!comment.anchor || position.start === undefined || !row) throw new Error('位置待确认，请结合原片段检查');
+      const targetNode = await this.visibleCommentTarget(comment.path, undefined, service, session.id, current);
+      if (!current() || service !== this.service) return;
+      if (targetNode?.session === session.id) await this.view.reveal(targetNode, { select: true, focus: false });
+      if (!current() || service !== this.service) return;
       const selected = service.selection(comment.path);
       const working = comment.anchor.side === 'right' && !this.dirtyFiles().has(selected.file) ? await this.workingDocument(selected, service, current) : undefined;
       if (!current() || service !== this.service) return;

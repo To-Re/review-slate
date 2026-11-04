@@ -20,7 +20,7 @@ npm test
 npm run package
 ```
 
-`npm test` 先编译 TypeScript，再运行 Node.js 内置测试。打包脚本读取 `package.json` 的版本，输出 `artifacts/review-slate-<version>.vsix`；当前版本为 1.0.2，产物为 `artifacts/review-slate-1.0.2.vsix`，正式安装包见 [1.0.2 Release](https://github.com/To-Re/review-slate/releases/tag/v1.0.2)。构建和测试不会安装扩展或启动编辑器；真实界面验证需另行安装，重载所有相关编辑器窗口后，在独立的合成项目中进行。
+`npm test` 先编译 TypeScript，再运行 Node.js 内置测试。打包脚本读取 `package.json` 的版本，输出 `artifacts/review-slate-<version>.vsix`；当前源码版本为 1.0.3，打包路径为 `artifacts/review-slate-1.0.3.vsix`，正式安装包入口为 [1.0.3 Release](https://github.com/To-Re/review-slate/releases/tag/v1.0.3)。构建和测试不会安装扩展或启动编辑器；真实界面验证需另行安装，重载所有相关编辑器窗口后，在独立的合成项目中进行。
 
 模块职责与定向命令见[客户端入口](docs/客户端/README.md)，Git 扫描和调度见[本地审阅引擎](docs/客户端/本地审阅引擎.md)，存储、Agent 回执与恢复见[数据协议](docs/客户端/数据协议.md)。运行时沿用 VS Code API 与 Node.js 内置模块；包内容由 `package.json` 的 `files` 白名单限定，入口为 [`scripts/package.cjs`](scripts/package.cjs)。
 
@@ -34,7 +34,7 @@ npm run package
 
 [产品验收条件](docs/产品/验收条件.md)定义 `VSIX-AC-*` 的预期结果，[测试入口](docs/测试/README.md)定义场景与证据层级，[验证记录](docs/测试/验证记录.md)记录实际执行。实质性代码改动需独立代码审核；涉及产品或界面行为时，在 QA 后由相应角色核对同一实际版本。
 
-本轮性能检查分别测量首次选择基点到树模型完成、点击到 Diff 请求，以及刷新期间的排队。合成仓库、模拟 VS Code API 和真实 GUI 是不同证据，不能把 `vscode.diff` 调用完成写成屏幕已经显示，也不能把测量值承诺为所有仓库的耗时。性能方法和结果只在测试资料维护。
+性能检查分别测量首次选择基点到树模型完成、点击到 Diff 请求，以及刷新期间的排队。合成仓库、模拟 VS Code API 和真实 GUI 是不同证据，不能把 `vscode.diff` 调用完成写成屏幕已经显示，也不能把测量值承诺为所有仓库的耗时。性能方法和结果只在测试资料维护。
 
 ## 提交与交付
 
