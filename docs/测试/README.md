@@ -34,6 +34,7 @@ node --test test/qa-vsix-performance.test.cjs test/vsix-performance.test.cjs
 | 分支、CR、恢复和删除 | 进度隔离；陈旧页面拒绝写入；重进程恢复；归档可恢复；永久删除失败保留重试能力 | [CR](../../test/reviews.test.cjs)、[审阅](../../test/review.test.cjs)、[删除](../../test/purge.test.cjs) | 重载、切分支、切 CR、异常后恢复和确认文案 |
 | 文件和安全边界 | 不读符号链接目标；二进制、子模块、冲突和超限明确处理；只读 Git 不执行过滤器或懒加载 | [审阅](../../test/review.test.cjs)、[可编辑目标](../../test/editable.test.cjs)、[性能回归](../../test/vsix-performance.test.cjs) | 远程文件系统与权限错误的宿主呈现 |
 | 容量和损坏恢复 | 单文件 5 MiB、单次差异 80 MiB 限额保持；失败不伪造已审，移除错误输入可恢复 | [审阅](../../test/review.test.cjs)、[QA 预算回归](../../test/qa-vsix-performance.test.cjs)、[大清单](../../test/pending-size.test.cjs) | 代表性大仓和资源压力下的实际响应 |
+| 多仓库审阅记录 | 按仓库分组同时列出各仓库未归档 CR；点击切换仓库并打开，分支不符时不切换；旧节点不能操作另一仓库；读取失败只影响该组；某仓库当前 CR 损坏时仍可打开它的另一条，被拒绝的点击不扫描文件；隐藏时不周期读取、至少间隔 15 秒；仓库增删更新分组；单仓库平铺 | [记录分组](../../test/history.test.cjs)、[仓库发现与切换](../../test/repositories.test.cjs)、[编辑器](../../test/editor.test.cjs) | 真实多根工作区的分组展开、行内按钮，以及 Git 图形新建后两个仓库同时可见 |
 | 变更树筛选 | 三种互斥模式只投影已有数据；全量计数、批量保护、偏好、评论导航与草稿归属保持 | [筛选](../../test/tree-filter.test.cjs)、[独立筛选 QA](../../test/qa-tree-filter.test.cjs) | 原生入口、模式文字、空态、目录禁用、定位与实际输入连续性 |
 
 ## 变更树筛选专项

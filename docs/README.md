@@ -6,7 +6,7 @@
 
 `main` 只维护 VSIX，兼容目标包括 VS Code、Trae 和 Trae CN。Codex 的开发源码与文档在 [beta 分支](https://github.com/To-Re/review-slate/tree/beta)，不属于本分支的交付范围。
 
-本分支版本为 1.0.3，新增变更树筛选；安装入口见 [1.0.3 Release](https://github.com/To-Re/review-slate/releases/tag/v1.0.3)，验证范围与后续工作见[项目状态](项目状态.md)。
+本分支源码版本为 1.0.4，新增多仓库审阅记录，尚未发布；最新发布为 1.0.3（新增变更树筛选），安装入口见 [1.0.3 Release](https://github.com/To-Re/review-slate/releases/tag/v1.0.3)，验证范围与后续工作见[项目状态](项目状态.md)。
 
 ## 按角色查阅
 

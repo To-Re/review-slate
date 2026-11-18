@@ -45,7 +45,7 @@ test('编辑器适配：入口、两种基点、通知不阻塞、原生 Diff、
   let activate; try { ({ activate } = require('../dist/extension')); } finally { Module._load = previous; }
   const context = { extensionPath: path.resolve(__dirname, '..'), extensionMode: 3, subscriptions: [], globalStorageUri: { fsPath: f.storage }, globalState: memory(), workspaceState: memory() };
   let app = activate(context); t.after(() => app.dispose()); await app.ready;
-  assert.equal(app.tree.nodes.length, 0); assert.equal(view.message, undefined); assert.equal(commands.size, 25);
+  assert.equal(app.tree.nodes.length, 0); assert.equal(view.message, undefined); assert.equal(commands.size, 26);
   assert.ok(commands.has('codeReview.filter')); assert.ok(commands.has('codeReview.clearFilter'));
   assert.equal(app.history.getTreeItem(app.history.getChildren()[0]).command.command, 'codeReview.newReview');
   assert.equal(app.settings.nodes[0].description, path.basename(f.root));
@@ -258,13 +258,44 @@ test('编辑器适配：入口、两种基点、通知不阻塞、原生 Diff、
   await commands.get('codeReview.fromCommit')({ id: 'git', rootUri: mock.Uri.file(f.root) }, { id: f.base });
   assert.equal(app.service.repo.root, f.root); assert.equal(app.service.view.session.id, oldSession.id);
   assert.ok(app.service.view.notes.comments.some(c => c.id === oldComment.id));
+  // Multi-repository workspaces list every repository's CRs at once and switch by clicking a record.
+  await app.whenIdle();
+  const group = root => app.history.nodes.find(node => node.repository?.root === root);
+  const otherSession = (await new (require('../dist/state').ReviewState)(f.storage, other.root).sessions())[0];
+  assert.deepEqual(app.history.nodes.map(node => node.repository?.root).sort(), [f.root, other.root].sort());
+  assert.equal(app.history.getTreeItem(group(f.root)).contextValue, 'currentReviewRepository');
+  assert.match(app.history.getTreeItem(group(f.root)).description, /当前仓库/);
+  assert.equal(app.history.getTreeItem(group(other.root)).contextValue, 'reviewRepository');
+  const otherItem = group(other.root).children.find(node => node.review?.id === otherSession.id);
+  assert.equal(app.history.getTreeItem(otherItem).contextValue, 'otherRepositoryReview');
+  assert.equal(app.history.getTreeItem(otherItem).command.command, 'codeReview.openReview');
+  assert.ok(group(f.root).children.some(node => node.review?.id === oldSession.id));
+  assert.equal(new Set(app.history.nodes.flatMap(node => [node.id, ...node.children.map(child => child.id)])).size,
+    app.history.nodes.reduce((total, node) => total + 1 + node.children.length, 0));
+  assert.equal(app.history.getTreeItem(app.history.getChildren()[0]).description, path.basename(f.root));
+  await commands.get('codeReview.deleteReview')(otherItem);
+  assert.match(errors.at(-1), /仓库已切换/); assert.ok(!(await new (require('../dist/state').ReviewState)(f.storage, other.root).sessions())[0].deletedAt);
+  await commands.get('codeReview.openReview')(otherItem);
+  assert.equal(app.service.repo.root, other.root); assert.equal(app.service.view.session.id, otherSession.id);
+  assert.equal(context.workspaceState.get('selectedRepository'), other.root);
+  assert.ok(group(f.root).children.some(node => node.review?.id === oldSession.id), 'the previous repository stays listed while switching');
+  await app.whenIdle();
+  assert.equal(app.history.getTreeItem(group(other.root)).contextValue, 'currentReviewRepository');
+  await commands.get('codeReview.openReview')(group(f.root).children.find(node => node.review?.id === oldSession.id));
+  assert.equal(app.service.repo.root, f.root); assert.equal(app.service.view.session.id, oldSession.id);
+  await commands.get('codeReview.switchRepository')(group(other.root));
+  assert.equal(app.service.repo.root, other.root); assert.equal(app.service.view.session.id, otherSession.id);
+  await commands.get('codeReview.switchRepository')(group(f.root));
+  assert.equal(app.service.repo.root, f.root); assert.equal(app.service.view.session.id, oldSession.id);
+  await app.whenIdle();
   app.history.render({ ...app.service.view, session: undefined, sessions: [{ ...oldSession, deletedAt: '2026-11-02' }], purgePending: [oldSession.id] });
   const unfinished = app.history.nodes.find(n => n.id === 'purge-pending');
   assert.match(app.history.getTreeItem(unfinished).label, /删除未完成/);
   assert.equal(app.history.getTreeItem(unfinished.children[0]).contextValue, 'purgePendingReview');
   await f.write('uncommented/nested/example.txt', 'only a file change, no directory comment');
   await commands.get('codeReview.refresh')();
-  const doomed = app.history.nodes.find(n => n.review?.id === oldSession.id);
+  const doomed = app.history.nodes.flatMap(n => [n, ...(n.children || [])]).find(n => n.review?.id === oldSession.id);
+  assert.equal(doomed.root, f.root);
   await commands.get('codeReview.purgeReview')(doomed);
   assert.equal(app.service.view.session.id, oldSession.id); assert.equal(warnings.at(-1)[1].modal, true);
   assert.ok(warnings.at(-1)[1].detail.includes(oldSession.base));
@@ -281,6 +312,9 @@ test('编辑器适配：入口、两种基点、通知不阻塞、原生 Diff、
   const otherDirectory = path.join(context.globalStorageUri.fsPath, hash(other.root));
   const catalogPath = path.join(otherDirectory, 'reviews.json'), savedCatalog = await fs.readFile(catalogPath);
   await fs.writeFile(catalogPath, 'invalid');
+  await commands.get('codeReview.refresh')(); await app.whenIdle();
+  assert.match(app.history.getTreeItem(group(other.root)).description, /读取失败/);
+  assert.equal(app.service.repo.root, f.root); assert.equal(app.service.view.error, undefined);
   pick = items => items.find(item => item.repo?.root === other.root);
   await commands.get('codeReview.repository')();
   assert.equal(app.service.repo.root, other.root);

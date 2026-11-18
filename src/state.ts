@@ -95,6 +95,12 @@ export class ReviewState {
     return catalog?.sessions.find(session => session.id === id && !session.deletedAt);
   }
   async sessions(): Promise<Session[]> { return (await this.catalog())?.sessions || []; }
+  /** One validated catalog read for read-only listings; never creates storage. */
+  async listing(): Promise<{ sessions: Session[]; purgePending: string[]; activeByBranch: Record<string, string> }> {
+    const catalog = await this.catalog();
+    return { sessions: catalog?.sessions || [], purgePending: catalog?.sessions.filter(session => catalog.purged?.[session.id]).map(session => session.id) || [],
+      activeByBranch: { ...catalog?.activeByBranch } };
+  }
   async isPurged(id: string): Promise<boolean> {
     return Object.values((await this.catalog())?.purged || {}).some(scopes => scopes.includes(id));
   }

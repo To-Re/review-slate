@@ -6,11 +6,12 @@ import { pickCommit } from './commit-picker';
 import { noteStatus, replyMatches, sameTarget } from './comments';
 import { GitRepository } from './git';
 import { handoffText } from './handoff';
-import { HistoryNode, ReviewHistory } from './history';
+import { HistoryNode, RepositoryReviews, ReviewHistory } from './history';
 import { decode, hash, isCommit, isNotes, LegacyComparison, messageOf, Pair, snapshotId, snapshotText } from './model';
 import { CommentPanel, PanelMessage } from './panel';
 import { ReviewService, Selection } from './review';
 import { ReviewSettings, SettingNode } from './settings';
+import { ReviewState } from './state';
 import { filesIn, markRequest, ReviewTree, treeFilter, TreeFilter, treeFilterLabels, TreeNode } from './tree';
 
 interface DocumentData { selection: Selection; side: 'left' | 'right'; text: string; full: boolean; root: string; live?: boolean }
@@ -48,6 +49,18 @@ export class ReviewExtension implements vscode.Disposable {
   private activeTab?: vscode.Tab;
   private activeTabInput?: unknown;
   private activeTabGroup?: vscode.TabGroup;
+  /** Git repositories found in the workspace at the last repository scan. */
+  private repositoryHandles = new Map<string, GitRepository>();
+  private repositoryRoots: string[] = [];
+  /** Saved CRs of the non-current repositories; read in the background, never written. */
+  private readonly otherReviews = new Map<string, RepositoryReviews>();
+  private reviewsLoading?: Promise<void>;
+  private reviewsQueued = false;
+  private reviewsReadAt = 0;
+  private readonly remembered = new Map<string, number>();
+  private rememberCount = 0;
+  private repositoryScanQueued = false;
+  private watchingGit = false;
   private readonly timer: ReturnType<typeof setInterval>;
   readonly ready: Promise<void>;
   constructor(private readonly context: vscode.ExtensionContext) {
@@ -90,7 +103,7 @@ export class ReviewExtension implements vscode.Disposable {
     for (const [name, handler] of Object.entries(commands)) {
       this.listeners.push(vscode.commands.registerCommand('codeReview.' + name, (node?: TreeNode) => {
         if ((name === 'open' || name === 'comment') && node?.path && node.kind !== 'folder') return this.openImmediate(node);
-        if (name === 'refresh') return this.requestRefresh(true);
+        if (name === 'refresh') return this.requestRefresh(true).then(() => this.loadOtherReviews(true));
         this.navigation++;
         const current = this.navigationGuard(), allowBatch = this.filter === 'all';
         return this.enqueue(() => handler(node, current, allowBatch));
@@ -105,7 +118,11 @@ export class ReviewExtension implements vscode.Disposable {
       { this.navigation++; return this.enqueue(() => this.fromCommit(sourceControl, commit)); }));
     for (const action of ['openReview', 'deleteReview', 'restoreReview', 'purgeReview'] as const) {
       this.listeners.push(vscode.commands.registerCommand('codeReview.' + action, (node?: HistoryNode) => { this.navigation++; return this.enqueue(async () => {
+        if (action === 'openReview' && node?.review && node.root && node.root !== this.service?.repo.root) {
+          await this.openInRepository(node.root, node.review.id); return;
+        }
         if (!this.service || !node?.review) throw new Error('请先选择一条审阅记录');
+        if (node.root && node.root !== this.service.repo.root) throw new Error('当前仓库已切换，请从审阅记录重新选择');
         if (action === 'purgeReview') { await this.purgeReview(node); return; }
         if (action === 'openReview') await this.service.openReview(node.review.id);
         else await this.service.deleteReview(node.review.id, action === 'deleteReview');
@@ -113,6 +130,13 @@ export class ReviewExtension implements vscode.Disposable {
         if (action === 'deleteReview') void vscode.window.showInformationMessage('已归档这条 CR，可在审阅记录的「已归档」中恢复。');
       }); }));
     }
+    this.listeners.push(vscode.commands.registerCommand('codeReview.switchRepository', (node?: HistoryNode) => { this.navigation++; return this.enqueue(async () => {
+      const root = node?.repository?.root;
+      if (!root) throw new Error('请在审阅记录中选择一个仓库');
+      if (root !== this.service?.repo.root) await this.selectRepository(false, root);
+    }); }));
+    const folders = vscode.workspace.onDidChangeWorkspaceFolders?.(() => this.requestRepositoryScan());
+    if (folders) this.listeners.push(folders);
     this.listeners.push(this.view.onDidChangeCheckboxState(event => {
       const allowBatch = this.filter === 'all';
       void this.enqueue(async () => {
@@ -122,7 +146,11 @@ export class ReviewExtension implements vscode.Disposable {
       });
     }));
     this.listeners.push(this.view.onDidChangeVisibility(event => { if (event.visible && !this.pending) void this.requestRefresh(); }));
-    this.listeners.push(this.historyView.onDidChangeVisibility(event => { if (event.visible && !this.pending) void this.requestRefresh(); }));
+    this.listeners.push(this.historyView.onDidChangeVisibility(event => {
+      if (!event.visible) return;
+      this.loadOtherReviews(true);
+      if (!this.pending) void this.requestRefresh();
+    }));
     this.listeners.push(vscode.workspace.onDidSaveTextDocument(() => { if (this.service) void this.requestRefresh(); }));
     this.listeners.push(vscode.workspace.onDidChangeTextDocument(() => {
       if (JSON.stringify([...this.dirtyFiles()].sort()) !== this.renderedDirty) this.render();
@@ -140,9 +168,9 @@ export class ReviewExtension implements vscode.Disposable {
     this.ready = this.enqueue(() => this.selectRepository(false), false);
   }
   async whenIdle(): Promise<void> {
-    let tail: Promise<void>, filterTail: Promise<void>;
-    do { tail = this.tail; filterTail = this.filterTail; await Promise.all([tail, filterTail, ...this.openings]); }
-    while (tail !== this.tail || filterTail !== this.filterTail || this.openings.size);
+    let tail: Promise<void>, filterTail: Promise<void>, reviews: Promise<void> | undefined;
+    do { tail = this.tail; filterTail = this.filterTail; reviews = this.reviewsLoading; await Promise.all([tail, filterTail, reviews, ...this.openings]); }
+    while (tail !== this.tail || filterTail !== this.filterTail || this.openings.size || this.reviewsLoading);
   }
   private async chooseTreeFilter(): Promise<void> {
     const choice = await vscode.window.showQuickPick((['all', 'unreviewed', 'comments'] as const).map(filter => ({
@@ -234,6 +262,11 @@ export class ReviewExtension implements vscode.Disposable {
       try {
         const api = (await builtIn.activate()).getAPI(1);
         for (const repository of api.repositories || []) folders.add(repository.rootUri.fsPath);
+        if (!this.watchingGit && !this.disposed && api.onDidOpenRepository && api.onDidCloseRepository) {
+          // The Git extension can discover nested repositories after activation.
+          this.watchingGit = true;
+          this.listeners.push(api.onDidOpenRepository(() => this.requestRepositoryScan()), api.onDidCloseRepository(() => this.requestRepositoryScan()));
+        }
       } catch { /* workspace-folder discovery remains available */ }
     }
     const result = new Map<string, GitRepository>();
@@ -241,18 +274,119 @@ export class ReviewExtension implements vscode.Disposable {
       try { const repo = await GitRepository.open(folder); result.set(repo.root, repo); }
       catch { /* an editor workspace folder can be outside Git */ }
     }
+    const changed = JSON.stringify([...result.keys()].sort()) !== JSON.stringify([...this.repositoryRoots].sort());
+    this.repositoryHandles = result; this.repositoryRoots = [...result.keys()];
+    for (const root of this.otherReviews.keys()) if (!result.has(root)) this.otherReviews.delete(root);
+    // Before the first repository is selected, selectRepository reads the others itself.
+    if (changed && this.service) this.loadOtherReviews(true);
     return [...result.values()];
   }
-  private async selectRepository(prompt: boolean): Promise<void> {
+  private requestRepositoryScan(): void {
+    if (this.repositoryScanQueued || this.disposed) return;
+    this.repositoryScanQueued = true;
+    void this.enqueue(async () => {
+      this.repositoryScanQueued = false;
+      const roots = (await this.repositories()).map(repo => repo.root);
+      if (!this.service || !roots.includes(this.service.repo.root)) await this.selectRepository(false);
+    }, false);
+  }
+  /** Keep the previous repository's list visible while the background reader catches up. */
+  private remember(service?: ReviewService): void {
+    if (!service || service.view.error || !service.view.branch) return;
+    const { view } = service, pending = view.purgePending || [];
+    this.otherReviews.set(service.repo.root, { root: service.repo.root, branch: view.branch, active: view.session?.id,
+      sessions: (view.sessions || []).filter(session => !session.deletedAt && !pending.includes(session.id)) });
+    this.remembered.set(service.repo.root, ++this.rememberCount);
+  }
+  private async adopt(service: ReviewService): Promise<void> {
+    if (this.service && this.service !== service && this.service.repo.root !== service.repo.root) this.remember(this.service);
+    this.service = service; this.selected = undefined; this.anchor = undefined;
+    await this.refreshSettings();
+    await this.context.workspaceState.update('selectedRepository', service.repo.root);
+    this.loadOtherReviews(true);
+  }
+  /**
+   * Reads the other repositories' saved CRs outside the command queue. Periodic refreshes only read
+   * for a visible history list and at most every 15 seconds; switches and explicit refreshes read at once.
+   */
+  private loadOtherReviews(force = false): void {
+    if (this.disposed) return;
+    if (this.repositoryRoots.length < 2) {
+      if (this.otherReviews.size) { this.otherReviews.clear(); this.renderHistory(); }
+      return;
+    }
+    if (!force && (!this.historyView.visible || Date.now() - this.reviewsReadAt < 15000)) return;
+    if (this.reviewsLoading) { this.reviewsQueued = true; return; }
+    this.reviewsLoading = (async () => {
+      await undefined; // The handle is published before the loop can finish.
+      try {
+        do {
+          this.reviewsQueued = false;
+          const skipped = this.service?.repo.root, read = new Map<string, RepositoryReviews>();
+          for (const root of this.repositoryRoots) {
+            if (root === skipped || this.disposed) continue;
+            const version = this.remembered.get(root), summary = await this.readRepositoryReviews(root);
+            // A switch that remembered fresher data during this read wins over it.
+            if (this.remembered.get(root) === version) read.set(root, summary);
+          }
+          if (this.disposed) return;
+          this.reviewsReadAt = Date.now();
+          let changed = false;
+          for (const [root, summary] of read) {
+            if (!this.repositoryRoots.includes(root) || root === this.service?.repo.root) continue;
+            if (JSON.stringify(this.otherReviews.get(root)) !== JSON.stringify(summary)) { this.otherReviews.set(root, summary); changed = true; }
+          }
+          if (changed) this.renderHistory();
+        } while (this.reviewsQueued && !this.disposed);
+      } catch { /* Each repository reports its own read failure. */ }
+      finally { this.reviewsLoading = undefined; }
+    })();
+  }
+  private async readRepositoryReviews(root: string, retry = true): Promise<RepositoryReviews> {
+    try {
+      const repo = this.repositoryHandles.get(root) || await GitRepository.open(root);
+      const listing = await new ReviewState(this.context.globalStorageUri.fsPath, repo.root).listing();
+      const sessions = listing.sessions.filter(session => !session.deletedAt && !listing.purgePending.includes(session.id));
+      if (!sessions.length) return { root, sessions };
+      const branch = await repo.branch();
+      return { root, branch, active: listing.activeByBranch[branch.key], sessions };
+    } catch (error) {
+      // An atomic catalog replacement can fail one read; a persistent fault fails again and is shown.
+      return retry && !this.disposed ? this.readRepositoryReviews(root, false) : { root, sessions: [], error: messageOf(error) };
+    }
+  }
+  private async openInRepository(root: string, id: string): Promise<void> {
+    const repo = this.repositoryHandles.get(root) || (await this.repositories()).find(item => item.root === root);
+    if (!repo) throw new Error('该仓库已不在当前工作区，请刷新审阅记录');
+    const named = (error: unknown): Error => new Error(path.basename(root) + '：' + messageOf(error));
+    const service = new ReviewService(repo, this.context.globalStorageUri.fsPath);
+    try {
+      // Check the clicked CR's ID, archive state and branch before scanning anything there.
+      await service.state.resume(repo, this.context.globalState.get<LegacyComparison>('comparison:' + hash(root)));
+      await service.state.open(id, await repo.branch());
+    } catch (error) { throw named(error); }
+    try { await service.refresh(); }
+    catch (error) {
+      // The CR is already active in that repository; show it with its read error, as selectRepository does.
+      await this.adopt(service).catch(() => { /* the read error below is the one to report */ });
+      throw named(error);
+    }
+    await this.adopt(service);
+  }
+  private async selectRepository(prompt: boolean, root?: string): Promise<void> {
     const repositories = await this.repositories();
     if (!repositories.length) {
       this.service = undefined; this.selected = undefined; this.anchor = undefined;
       this.view.message = '请打开包含提交的 Git 仓库'; return;
     }
     const last = this.context.workspaceState.get<string>('selectedRepository');
-    const selected = prompt ? await vscode.window.showQuickPick(repositories.map(repo => ({ label: path.basename(repo.root), description: repo.root, repo })), { title: '选择仓库' }) :
-      { repo: repositories.find(repo => repo.root === last) || repositories[0] };
+    const requested = root ? repositories.find(repo => repo.root === root) : undefined;
+    if (root && !requested) throw new Error('该仓库已不在当前工作区，请刷新审阅记录');
+    const selected = requested ? { repo: requested } :
+      prompt ? await vscode.window.showQuickPick(repositories.map(repo => ({ label: path.basename(repo.root), description: repo.root, repo })), { title: '选择仓库' }) :
+        { repo: repositories.find(repo => repo.root === last) || repositories[0] };
     if (!selected) return;
+    if (this.service && this.service.repo.root !== selected.repo.root) this.remember(this.service);
     this.service = new ReviewService(selected.repo, this.context.globalStorageUri.fsPath);
     this.settings.render(selected.repo.root, '读取中…');
     this.selected = undefined; this.anchor = undefined;
@@ -263,12 +397,13 @@ export class ReviewExtension implements vscode.Disposable {
     } catch (error) {
       this.settings.render(selected.repo.root, '读取失败');
       this.service.view.error = messageOf(error); throw error;
-    }
+    } finally { this.loadOtherReviews(true); }
   }
   private async refresh(): Promise<void> {
     if (!this.service) { await this.selectRepository(false); return; }
     const navigation = this.navigation, service = this.service;
     await service.refresh();
+    this.loadOtherReviews();
     await this.refreshSettings();
     // A file opened while the scan was running owns its freshly read selection.
     if (navigation !== this.navigation || service !== this.service) return;
@@ -408,9 +543,7 @@ export class ReviewExtension implements vscode.Disposable {
     const service = this.service?.repo.root === selected.root ? this.service : new ReviewService(selected, this.context.globalStorageUri.fsPath);
     if (service !== this.service) await service.start(this.context.globalState.get<LegacyComparison>('comparison:' + hash(selected.root)));
     await service.choose(base, 'Git 图形选中的提交');
-    this.service = service; this.selected = undefined; this.anchor = undefined;
-    await this.refreshSettings();
-    await this.context.workspaceState.update('selectedRepository', selected.root);
+    await this.adopt(service);
     await vscode.commands.executeCommand('codeReview.files.focus');
   }
   private async newFromCommit(): Promise<void> {
@@ -457,6 +590,15 @@ export class ReviewExtension implements vscode.Disposable {
     await this.refresh();
     void vscode.window.showInformationMessage('已永久删除这条 CR。');
   }
+  private renderHistory(): void {
+    const service = this.service;
+    if (!service) return;
+    const root = service.repo.root, data = service.view;
+    const others = this.repositoryRoots.length > 1 ? this.repositoryRoots.filter(item => item !== root)
+      .map(item => this.otherReviews.get(item) || { root: item, sessions: [], loading: true }) : [];
+    this.history.render(data, root, others);
+    this.historyView.description = others.length ? path.basename(root) + (data.branch ? ' · ' + data.branch.label : '') : data.branch?.label;
+  }
   private render(error?: string): void {
     const active = vscode.window.activeTextEditor;
     void vscode.commands.executeCommand('setContext', 'codeReview.commentable', !!(active && this.entryFor(active.document.uri)?.full));
@@ -474,8 +616,7 @@ export class ReviewExtension implements vscode.Disposable {
     }
     const data = service.view;
     this.tree.render(data, dirty, this.filter);
-    this.history.render(data);
-    this.historyView.description = data.branch?.label;
+    this.renderHistory();
     this.view.description = path.basename(service.repo.root) + (data.branch ? ' · ' + data.branch.label : '');
     const changes = data.files.filter(file => !file.commentOnly), reviewed = changes.filter(file => file.status === 'reviewed' && !file.error && !dirty.has(file.path)).length;
     const status = data.error ? '读取失败，已有数据保留' : data.session ? (this.filter === 'all' ? '' : '全部范围 ') + reviewed + '/' + changes.length + ' 已审 · 保存后的工作区' : undefined;

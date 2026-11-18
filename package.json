@@ -2,7 +2,7 @@
   "name": "code-review",
   "displayName": "ReviewSlate",
   "description": "在编辑器里审阅文件变更、留下批注并交给 Agent 处理。固定基点，保存进度，无需服务器。",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "publisher": "to-re",
   "license": "MIT",
   "engines": {
@@ -189,6 +189,11 @@
         "command": "codeReview.clearFilter",
         "title": "ReviewSlate：显示全部",
         "icon": "$(clear-all)"
+      },
+      {
+        "command": "codeReview.switchRepository",
+        "title": "ReviewSlate：切换到此仓库",
+        "icon": "$(arrow-swap)"
       }
     ],
     "menus": {
@@ -309,6 +314,16 @@
           "command": "codeReview.purgeReview",
           "when": "view == codeReview.reviews && (viewItem == savedReview || viewItem == deletedReview || viewItem == purgePendingReview)",
           "group": "danger@1"
+        },
+        {
+          "command": "codeReview.switchRepository",
+          "when": "view == codeReview.reviews && viewItem == reviewRepository",
+          "group": "inline@1"
+        },
+        {
+          "command": "codeReview.switchRepository",
+          "when": "view == codeReview.reviews && viewItem == reviewRepository",
+          "group": "review@1"
         }
       ],
       "editor/context": [
@@ -328,6 +343,10 @@
       "commandPalette": [
         {
           "command": "codeReview.fromCommit",
+          "when": "false"
+        },
+        {
+          "command": "codeReview.switchRepository",
           "when": "false"
         }
       ]
