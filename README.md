@@ -8,7 +8,7 @@ ReviewSlate is a local Git review extension for VS Code-compatible desktop edito
 
 ReviewSlate 以 VSIX 分发，面向 VS Code、Trae 和 Trae CN 桌面编辑器。本仓库 `main` 维护这一扩展。
 
-**1.0.3** 的安装入口为 [1.0.3 Release](https://github.com/To-Re/review-slate/releases/tag/v1.0.3)，附件名为 `review-slate-1.0.3.vsix`。本版新增“全部 / 未审核 / 有评论”筛选：在“变更文件”标题栏点击漏斗选择模式，筛选启用时可点击“显示全部”恢复。操作范围见[筛选说明](docs/用户文档/使用指南.md#筛选变更文件)，版本变化见 [CHANGELOG](CHANGELOG.md)。
+**1.0.4** 的安装入口为 [1.0.4 Release](https://github.com/To-Re/review-slate/releases/tag/v1.0.4)，附件名为 `review-slate-1.0.4.vsix`。本版让多仓库工作区的“审阅记录”按仓库分组，同时列出各仓库的 CR，点击其他仓库的记录即可切换过去，见[多仓库说明](docs/用户文档/使用指南.md#1-选择仓库和固定基点)。1.0.3 起提供“全部 / 未审核 / 有评论”筛选，见[筛选说明](docs/用户文档/使用指南.md#筛选变更文件)。版本变化见 [CHANGELOG](CHANGELOG.md)。
 
 需要支持 VS Code API `^1.107.0` 的编辑器、可运行 Git 的扩展宿主，以及至少有一个提交的 Git 仓库。Trae / Trae CN 的产品版本号不等于内核版本号。扩展仅在受信任的文件系统工作区启用，不支持浏览器版和虚拟工作区。
 
